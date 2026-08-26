@@ -1,12 +1,20 @@
 import * as THREE from 'three';
 import { fbm } from './RoadSpline.js';
 
-const COLOR_VALLEY = new THREE.Color(0x2d6a3b); // Deep rich lush green
-const COLOR_SLOPE  = new THREE.Color(0x608b41); // Warm golden-yellow green
-const COLOR_ROCK   = new THREE.Color(0x7a7265); // Steep rocky grey-brown
+// ── Slow Roads–style terrain palette ──────────────────────
+const COLOR_WATER_DEEP  = new THREE.Color(0x3b82f6); // Blue water
+const COLOR_BEACH       = new THREE.Color(0xd4b483); // Sandy shore
+const COLOR_VALLEY      = new THREE.Color(0x4a9e3f); // Vibrant valley green
+const COLOR_MID         = new THREE.Color(0x3d8c35); // Mid-slope green
+const COLOR_SLOPE       = new THREE.Color(0x7ab648); // Light bright-slope green
+const COLOR_HILL        = new THREE.Color(0x6b9e40); // Hilltop warm green
+const COLOR_ROCK        = new THREE.Color(0x8a7d68); // Rocky steep grey-brown
+
+// Water level — valleys below this are filled with water
+const WATER_LEVEL = 1.2;
 
 export class TerrainManager {
-  constructor(scene, roadSpline, vegetationManager, chunkSize = 90, segments = 22) {
+  constructor(scene, roadSpline, vegetationManager, chunkSize = 90, segments = 28) {
     this.scene = scene;
     this.roadSpline = roadSpline;
     this.vegetationManager = vegetationManager;
@@ -18,25 +26,45 @@ export class TerrainManager {
 
     this.terrainMaterial = new THREE.MeshStandardMaterial({
       vertexColors: true,
-      roughness: 0.82,
-      metalness: 0.04
+      roughness: 0.88,
+      metalness: 0.0,
     });
+
+    this._initWater();
+  }
+
+  // ── Water plane ────────────────────────────────────────
+  _initWater() {
+    const waterGeo = new THREE.PlaneGeometry(20000, 20000, 4, 4);
+    const waterMat = new THREE.MeshStandardMaterial({
+      color: 0x4a90d9,
+      roughness: 0.05,
+      metalness: 0.15,
+      transparent: true,
+      opacity: 0.88,
+    });
+    waterGeo.rotateX(-Math.PI / 2);
+    this.waterMesh = new THREE.Mesh(waterGeo, waterMat);
+    this.waterMesh.position.y = WATER_LEVEL;
+    this.waterMesh.receiveShadow = false;
+    this.scene.add(this.waterMesh);
   }
 
   getElevationAt(x, z) {
-    const raw = fbm(x * 0.018, z * 0.018, 5) * 12.0;
+    // Multi-octave terrain with gentle rolling hills
+    const raw = fbm(x * 0.016, z * 0.016, 6) * 18.0 - 1.5;
     if (this.roadSpline) {
       const info = this.roadSpline.getRoadInfo(x, z);
       if (isFinite(info.distance)) {
-        const roadRadius = 5.5;
+        const roadRadius  = 5.2;
         const blendRadius = 20.0;
 
         if (info.distance <= roadRadius) {
-          return info.height;
+          return info.height - 0.06;
         } else if (info.distance < blendRadius) {
           const t = (info.distance - roadRadius) / (blendRadius - roadRadius);
-          const smoothstepT = t * t * (3 - 2 * t);
-          return THREE.MathUtils.lerp(info.height, raw, smoothstepT);
+          const smoothT = t * t * (3 - 2 * t);
+          return THREE.MathUtils.lerp(info.height - 0.06, raw, smoothT);
         }
       }
     }
@@ -44,9 +72,14 @@ export class TerrainManager {
   }
 
   update(carPosition) {
+    // Track water plane with car
+    if (this.waterMesh) {
+      this.waterMesh.position.x = carPosition.x;
+      this.waterMesh.position.z = carPosition.z;
+    }
+
     const currentChunkX = Math.round(carPosition.x / this.chunkSize);
     const currentChunkZ = Math.round(carPosition.z / this.chunkSize);
-
     const neededKeys = new Set();
 
     for (let dx = -this.chunkRadius; dx <= this.chunkRadius; dx++) {
@@ -75,13 +108,13 @@ export class TerrainManager {
 
   _createChunk(cx, cz) {
     const halfSize = this.chunkSize / 2;
-    const step = this.chunkSize / this.segments;
-    const originX = cx * this.chunkSize;
-    const originZ = cz * this.chunkSize;
+    const step     = this.chunkSize / this.segments;
+    const originX  = cx * this.chunkSize;
+    const originZ  = cz * this.chunkSize;
 
     const positions = [];
-    const uvs = [];
-    const colors = [];
+    const uvs       = [];
+    const colors    = [];
 
     for (let j = 0; j <= this.segments; j++) {
       for (let i = 0; i <= this.segments; i++) {
@@ -91,36 +124,67 @@ export class TerrainManager {
         const worldZ = originZ + localZ;
 
         const height = this.getElevationAt(worldX, worldZ);
-        positions.push(localX, height, localZ);
+
+        // Clamp position at water level so terrain doesn't dip below water
+        const posY = Math.max(height, WATER_LEVEL - 0.05);
+        positions.push(localX, posY, localZ);
         uvs.push(i / this.segments, j / this.segments);
 
-        // Calculate slope gradient
-        const hR = this.getElevationAt(worldX + 1.2, worldZ);
-        const hL = this.getElevationAt(worldX - 1.2, worldZ);
-        const hF = this.getElevationAt(worldX, worldZ + 1.2);
-        const hB = this.getElevationAt(worldX, worldZ - 1.2);
-        const dx = (hR - hL) / 2.4;
-        const dz = (hF - hB) / 2.4;
-        const slope = Math.sqrt(dx * dx + dz * dz);
+        // ── Vertex color based on elevation & slope ──────
+        const hR = this.getElevationAt(worldX + 1.5, worldZ);
+        const hL = this.getElevationAt(worldX - 1.5, worldZ);
+        const hF = this.getElevationAt(worldX, worldZ + 1.5);
+        const hB = this.getElevationAt(worldX, worldZ - 1.5);
+        const dxSlope = (hR - hL) / 3.0;
+        const dzSlope = (hF - hB) / 3.0;
+        const slope = Math.sqrt(dxSlope * dxSlope + dzSlope * dzSlope);
 
-        const slopeT = THREE.MathUtils.clamp(slope / 0.55, 0, 1);
-        const rockT  = THREE.MathUtils.clamp((slope - 0.55) / 0.45, 0, 1);
+        let vertexColor;
 
-        const vertexColor = COLOR_VALLEY.clone().lerp(COLOR_SLOPE, slopeT).lerp(COLOR_ROCK, rockT);
-        const heightShift = THREE.MathUtils.clamp(height / 16.0, 0, 0.3);
-        vertexColor.addScalar(heightShift * 0.08);
+        if (height < WATER_LEVEL + 0.05) {
+          // Under water — use beach/sand color near shore
+          vertexColor = COLOR_BEACH.clone();
+        } else if (height < WATER_LEVEL + 0.8) {
+          // Sandy beach transition
+          const t = (height - WATER_LEVEL) / 0.8;
+          vertexColor = COLOR_BEACH.clone().lerp(COLOR_VALLEY, t * t);
+        } else {
+          // Normal terrain — slope-based color
+          const heightT  = THREE.MathUtils.clamp((height - WATER_LEVEL) / 14.0, 0, 1);
+          const slopeT   = THREE.MathUtils.clamp(slope / 0.5, 0, 1);
+          const rockT    = THREE.MathUtils.clamp((slope - 0.5) / 0.4, 0, 1);
+
+          // Base: blend valley → mid → slope greens by slope gradient
+          let base = COLOR_VALLEY.clone().lerp(COLOR_MID, heightT * 0.6).lerp(COLOR_SLOPE, slopeT * 0.5);
+
+          // High hilltops — warm slightly yellower green
+          if (heightT > 0.6) {
+            base.lerp(COLOR_HILL, (heightT - 0.6) / 0.4 * 0.4);
+          }
+
+          // Steep rocky faces
+          base.lerp(COLOR_ROCK, rockT * 0.85);
+
+          // Subtle brightness variation using FBM for micro-detail
+          const detail = fbm(worldX * 0.04, worldZ * 0.04, 2) * 0.08 - 0.04;
+          base.r = THREE.MathUtils.clamp(base.r + detail, 0, 1);
+          base.g = THREE.MathUtils.clamp(base.g + detail, 0, 1);
+          base.b = THREE.MathUtils.clamp(base.b + detail * 0.5, 0, 1);
+
+          vertexColor = base;
+        }
 
         colors.push(vertexColor.r, vertexColor.g, vertexColor.b);
       }
     }
 
     const indices = [];
-    const rowVertices = this.segments + 1;
+    const rowVerts = this.segments + 1;
     for (let j = 0; j < this.segments; j++) {
       for (let i = 0; i < this.segments; i++) {
-        const a = j * rowVertices + i;
+        const a = j * rowVerts + i;
         const b = a + 1;
-        const c = a + rowVertices;
+        const c = a + rowVerts;
         const d = c + 1;
         indices.push(a, c, b, b, c, d);
       }
@@ -128,8 +192,8 @@ export class TerrainManager {
 
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-    geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
-    geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+    geometry.setAttribute('uv',       new THREE.Float32BufferAttribute(uvs, 2));
+    geometry.setAttribute('color',    new THREE.Float32BufferAttribute(colors, 3));
     geometry.setIndex(indices);
     geometry.computeVertexNormals();
 

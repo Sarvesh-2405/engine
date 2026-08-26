@@ -39,7 +39,7 @@ export class RoadSpline {
   }
 
   _baseHeight(x, z) {
-    return fbm(x * 0.004, z * 0.004, 2) * this.heightScale * 0.5;
+    return 4.8 + fbm(x * 0.0035, z * 0.0035, 3) * this.heightScale;
   }
 
   _addControlPoint() {
@@ -48,7 +48,7 @@ export class RoadSpline {
       : new THREE.Vector3(0, this._baseHeight(0, 0), 0);
     const idx = this.controlPoints.length;
 
-    // Smooth winding — slightly gentler turns for high speed
+    // Smooth winding — natural flowing turns
     const turn = (valueNoise(idx * 0.22, 77) - 0.5) * 0.5;
     this.headingSeed += turn;
 
@@ -67,11 +67,54 @@ export class RoadSpline {
 
   rebuild() {
     this.curve = new THREE.CatmullRomCurve3(this.controlPoints, false, 'catmullrom', 0.5);
-    // Sample at ~2m spacing, capped so getRoadInfo loop is always fast
     const totalLen = this.curve.getLength();
     const num = Math.min(MAX_ROAD_POINTS, Math.max(2, Math.floor(totalLen / 2.0)));
     const pts = this.curve.getSpacedPoints(num);
-    this.roadPoints = pts.map(p => ({ x: p.x, y: p.y, z: p.z }));
+
+    const roadData = [];
+    let cumDist = 0;
+
+    for (let i = 0; i < pts.length; i++) {
+      const p = pts[i];
+      if (i > 0) {
+        const prev = pts[i - 1];
+        cumDist += p.distanceTo(prev);
+      }
+
+      const t = Math.min(i / (pts.length - 1), 0.9999);
+      const tangent = this.curve.getTangentAt(t).normalize();
+      // Horizontal perpendicular
+      const normal2D = new THREE.Vector3(-tangent.z, 0, tangent.x).normalize();
+
+      // Estimate curvature from surrounding tangents
+      let curvature = 0;
+      if (i > 0 && i < pts.length - 1) {
+        const tPrev = Math.max(0, (i - 1) / (pts.length - 1));
+        const tNext = Math.min(1, (i + 1) / (pts.length - 1));
+        const tanPrev = this.curve.getTangentAt(tPrev).normalize();
+        const tanNext = this.curve.getTangentAt(tNext).normalize();
+        const crossY = tanPrev.x * tanNext.z - tanPrev.z * tanNext.x;
+        const segDist = pts[i + 1].distanceTo(pts[i - 1]);
+        curvature = segDist > 0.001 ? crossY / segDist : 0;
+      }
+
+      // Banking angle (superelevation inward into turns, up to ~4 degrees)
+      const banking = THREE.MathUtils.clamp(-curvature * 14.0, -0.07, 0.07);
+
+      roadData.push({
+        x: p.x,
+        y: p.y,
+        z: p.z,
+        dist: cumDist,
+        tangent,
+        normal: normal2D,
+        curvature,
+        banking,
+        t,
+      });
+    }
+
+    this.roadPoints = roadData;
   }
 
   extendIfNecessary(carPos) {
@@ -82,8 +125,7 @@ export class RoadSpline {
       // Add more road ahead
       for (let i = 0; i < 25; i++) this._addControlPoint();
 
-      // Prune OLD control points that are very far behind the car
-      // Keep at most 120 control points total so the curve stays lean
+      // Prune OLD control points that are far behind the car
       if (this.controlPoints.length > 120) {
         const excess = this.controlPoints.length - 120;
         this.controlPoints.splice(0, excess);
@@ -97,32 +139,56 @@ export class RoadSpline {
 
   getRoadInfo(x, z) {
     const pts = this.roadPoints;
+    if (!pts || pts.length < 2) {
+      return { distance: Infinity, height: 0, point: null, crossOffset: 0, banking: 0, curvature: 0 };
+    }
+
     let minSq = Infinity;
     let closestY = 0;
     let closestPt = null;
+    let closestCrossOffset = 0;
+    let closestBanking = 0;
+    let closestCurvature = 0;
+    let closestTangent = null;
 
-    // Spatial short-circuit: only scan a window of 200 pts around closest
-    // Full scan on first call, then cached
     for (let i = 0; i < pts.length - 1; i++) {
       const p1 = pts[i], p2 = pts[i + 1];
       const abx = p2.x - p1.x, abz = p2.z - p1.z;
       const apx = x - p1.x,   apz = z - p1.z;
       const ab2 = abx * abx + abz * abz;
       const t   = ab2 === 0 ? 0 : Math.max(0, Math.min(1, (apx * abx + apz * abz) / ab2));
-      const dx  = x - (p1.x + t * abx);
-      const dz  = z - (p1.z + t * abz);
+      const projX = p1.x + t * abx;
+      const projZ = p1.z + t * abz;
+      const dx  = x - projX;
+      const dz  = z - projZ;
       const d2  = dx * dx + dz * dz;
+
       if (d2 < minSq) {
         minSq = d2;
-        closestY = p1.y;
+        closestY = p1.y + t * (p2.y - p1.y);
         closestPt = p1;
+        closestBanking = p1.banking + t * (p2.banking - p1.banking);
+        closestCurvature = p1.curvature + t * (p2.curvature - p1.curvature);
+        closestTangent = p1.tangent;
+
+        // Signed cross-track distance (positive to right of tangent, negative to left)
+        const cross = dx * p1.normal.x + dz * p1.normal.z;
+        closestCrossOffset = cross;
       }
     }
 
+    // Height adjusted for road banking across the road cross section
+    const adjustedHeight = closestY + (closestCrossOffset * Math.sin(closestBanking));
+
     return {
       distance: isFinite(minSq) ? Math.sqrt(minSq) : Infinity,
-      height:   closestY,
+      height:   adjustedHeight,
+      rawHeight: closestY,
       point:    closestPt,
+      crossOffset: closestCrossOffset,
+      banking:  closestBanking,
+      curvature: closestCurvature,
+      tangent:  closestTangent,
     };
   }
 }

@@ -22,6 +22,10 @@ class GameApp {
     this.renderer.setSize(window.innerWidth, window.innerHeight);
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 
+    // Enable soft shadow mapping by default
+    this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
     // Force canvas to fill the container absolutely
     const canvas = this.renderer.domElement;
     canvas.style.position = 'absolute';
@@ -34,7 +38,7 @@ class GameApp {
 
     // ── Scene ─────────────────────────────────────────────
     this.scene  = new THREE.Scene();
-    this.camera = new THREE.PerspectiveCamera(62, window.innerWidth / window.innerHeight, 0.05, 3000);
+    this.camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.05, 3000);
 
     // ── Atmosphere ────────────────────────────────────────
     this.atmosphere = new Atmosphere(this.scene, this.renderer);
@@ -45,8 +49,9 @@ class GameApp {
     this.vehicleController = new VehicleController(this.carMesh);
 
     // ── Road ──────────────────────────────────────────────
+    this.barrierMode = 'dynamic'; // 'dynamic' | 'none' | 'all'
     this.roadSpline = new RoadSpline(123);
-    this.roadGroup  = RoadMeshBuilder.buildMeshes(this.roadSpline);
+    this.roadGroup  = RoadMeshBuilder.buildMeshes(this.roadSpline, 9.8, this.barrierMode);
     this.scene.add(this.roadGroup);
     this.vehicleController._roadSplineRef = this.roadSpline;
 
@@ -72,6 +77,7 @@ class GameApp {
       onResetCar:          ()     => this._respawn(),
       onAutodriveChange:   (on)   => this.vehicleController.setAutodrive(on),
       onHeadlightChange:   (on)   => this._setHeadlights(on),
+      onBarrierChange:     (mode) => this._setBarrierMode(mode),
     });
 
     // ── Environment cycling state ─────────────────────────
@@ -97,24 +103,44 @@ class GameApp {
 
   // ── Headlights ────────────────────────────────────────────
   _buildHeadlights() {
-    // Two spotlights for headlights
-    this.headlightL = new THREE.SpotLight(0xfff5e0, 0, 80, Math.PI / 7, 0.4, 1.2);
-    this.headlightR = new THREE.SpotLight(0xfff5e0, 0, 80, Math.PI / 7, 0.4, 1.2);
+    // Twin high-power Xenon high-beam SpotLights
+    this.headlightL = new THREE.SpotLight(0xfff8ee, 0, 260, Math.PI / 4.2, 0.55, 1.0);
+    this.headlightR = new THREE.SpotLight(0xfff8ee, 0, 260, Math.PI / 4.2, 0.55, 1.0);
+
+    this.headlightL.castShadow = true;
+    this.headlightL.shadow.mapSize.width = 1024;
+    this.headlightL.shadow.mapSize.height = 1024;
+    this.headlightL.shadow.bias = -0.001;
 
     this.scene.add(this.headlightL, this.headlightL.target);
     this.scene.add(this.headlightR, this.headlightR.target);
 
-    // Ambient fill for night so driver can see the ground
-    this.nightAmbient = new THREE.PointLight(0x2040a0, 0, 30, 2);
+    // Wide-angle forward road flood light (illuminates road lanes, lines, and kerbs brightly)
+    this.roadFloodLight = new THREE.SpotLight(0xffffff, 0, 110, Math.PI / 2.8, 0.75, 1.1);
+    this.scene.add(this.roadFloodLight, this.roadFloodLight.target);
+
+    // Ambient fill so the car chassis, wheels, and road verges are clearly visible
+    this.nightAmbient = new THREE.PointLight(0x4060b0, 0, 50, 1.4);
     this.scene.add(this.nightAmbient);
+
+    // Glowing headlight bulb meshes on car nose
+    const bulbGeo = new THREE.SphereGeometry(0.08, 12, 12);
+    this.bulbMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0 });
+    this.bulbL = new THREE.Mesh(bulbGeo, this.bulbMat);
+    this.bulbR = new THREE.Mesh(bulbGeo, this.bulbMat);
+    this.bulbL.position.set(-0.65, 0.38, 2.7);
+    this.bulbR.position.set(0.65, 0.38, 2.7);
+    this.carMesh.root.add(this.bulbL, this.bulbR);
   }
 
   _setHeadlights(on) {
     this._headlightsOn = on;
-    const intensity = on ? 4.0 : 0;
-    this.headlightL.intensity = intensity;
-    this.headlightR.intensity = intensity;
-    this.nightAmbient.intensity = on ? 0.5 : 0;
+    const beamIntensity = on ? 22.0 : 0;
+    this.headlightL.intensity = beamIntensity;
+    this.headlightR.intensity = beamIntensity;
+    this.roadFloodLight.intensity = on ? 14.0 : 0;
+    this.nightAmbient.intensity = on ? 2.5 : 0;
+    this.bulbMat.opacity = on ? 0.95 : 0;
   }
 
   _updateHeadlightPositions() {
@@ -124,39 +150,54 @@ class GameApp {
     const fwd = new THREE.Vector3(Math.sin(h), 0, Math.cos(h));
     const rgt = new THREE.Vector3(Math.cos(h), 0, -Math.sin(h));
 
-    // Left headlight
+    // Left headlight (casts far ahead down the road)
     this.headlightL.position.copy(pos)
       .addScaledVector(rgt, -0.65)
       .addScaledVector(fwd, 2.8)
-      .add(new THREE.Vector3(0, 0.38, 0));
+      .add(new THREE.Vector3(0, 0.42, 0));
     this.headlightL.target.position.copy(pos)
-      .addScaledVector(fwd, 25)
-      .add(new THREE.Vector3(0, -0.5, 0));
+      .addScaledVector(fwd, 85)
+      .add(new THREE.Vector3(0, -0.2, 0));
     this.headlightL.target.updateMatrixWorld();
 
-    // Right headlight
+    // Right headlight (casts far ahead down the road)
     this.headlightR.position.copy(pos)
       .addScaledVector(rgt, 0.65)
       .addScaledVector(fwd, 2.8)
-      .add(new THREE.Vector3(0, 0.38, 0));
+      .add(new THREE.Vector3(0, 0.42, 0));
     this.headlightR.target.position.copy(pos)
-      .addScaledVector(fwd, 25)
-      .add(new THREE.Vector3(0, -0.5, 0));
+      .addScaledVector(fwd, 85)
+      .add(new THREE.Vector3(0, -0.2, 0));
     this.headlightR.target.updateMatrixWorld();
 
+    // Wide road flood light (illuminates immediate asphalt and kerbs)
+    this.roadFloodLight.position.copy(pos)
+      .addScaledVector(fwd, 2.5)
+      .add(new THREE.Vector3(0, 0.55, 0));
+    this.roadFloodLight.target.position.copy(pos)
+      .addScaledVector(fwd, 40)
+      .add(new THREE.Vector3(0, -0.4, 0));
+    this.roadFloodLight.target.updateMatrixWorld();
+
     // Night ambient follows car
-    this.nightAmbient.position.copy(pos).add(new THREE.Vector3(0, 2, 0));
+    this.nightAmbient.position.copy(pos).add(new THREE.Vector3(0, 2.0, 0));
   }
 
   // ── Environment ───────────────────────────────────────────
   _setEnvironment(name) {
     this.atmosphere.setEnvironment(name);
-    // Auto-enable headlights at night
+    // Automatically enable ultra-bright headlights in night mode
     const isNight = name === 'night';
-    this._setHeadlights(isNight);
+    this.hud._setHeadlights(isNight);
     this.hud.setEnvironmentLabel(name);
     const idx = this._envList.indexOf(name);
     if (idx >= 0) this._envIdx = idx;
+  }
+
+  // ── Barrier mode change ───────────────────────────────────
+  _setBarrierMode(mode) {
+    this.barrierMode = mode;
+    this._rebuildRoadMesh();
   }
 
   // ── Respawn ───────────────────────────────────────────────
@@ -174,8 +215,8 @@ class GameApp {
     this.vehicleController.headingAngle = Math.atan2(tangent.x, tangent.z);
     const groundY = this.terrainManager.getElevationAt(pt.x, pt.z);
     const safeY   = isFinite(groundY) ? groundY : 0;
-    this.vehicleController.position.y = safeY + 0.25;
-    this.vehicleController._smoothY   = safeY + 0.25;
+    this.vehicleController.position.y = safeY + 0.16;
+    this.vehicleController._smoothY   = safeY + 0.16;
   }
 
   // ── Road rebuild ─────────────────────────────────────────
@@ -184,7 +225,7 @@ class GameApp {
     this.roadGroup.traverse(child => {
       if (child.geometry) child.geometry.dispose();
     });
-    this.roadGroup = RoadMeshBuilder.buildMeshes(this.roadSpline);
+    this.roadGroup = RoadMeshBuilder.buildMeshes(this.roadSpline, 9.8, this.barrierMode);
     this.scene.add(this.roadGroup);
   }
 
@@ -223,6 +264,9 @@ class GameApp {
 
       // Camera cycle
       if (k === 'c') this.cameraManager.cycleMode();
+
+      // Road barrier cycle
+      if (k === 'b') this.hud.cycleBarrierMode();
 
       // Environment cycle: E = next, Q = prev
       if (k === 'e') {

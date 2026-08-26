@@ -1,20 +1,22 @@
 import * as THREE from 'three';
 
-const MODES = ['chase', 'cockpit', 'orbit'];
+const MODES = ['chase', 'close', 'cockpit', 'orbit'];
 
 export class CameraManager {
   constructor(camera) {
     this.camera = camera;
     this.mode   = 'chase';
 
-    this.chaseOffset  = new THREE.Vector3(0, 3.4, -9.0);
-    this.lookAtOffset = new THREE.Vector3(0, 1.1, 6.0);
+    // Perfectly calibrated grounded chase positions
+    this.chaseOffset = new THREE.Vector3(0, 2.5, -7.2);
+    this.closeOffset = new THREE.Vector3(0, 1.7, -5.2);
+    this.lookAtOffset = new THREE.Vector3(0, 0.95, 8.0);
 
     this.currentPos    = new THREE.Vector3();
     this.currentLookAt = new THREE.Vector3();
 
-    this.baseFov = 62;
-    this.maxFov  = 82; // more dramatic FOV stretch at high speed
+    this.baseFov = 60;
+    this.maxFov  = 84; // dramatic FOV stretch at high speed
 
     this.orbitYaw   = 0;
     this.orbitPitch = 0.35;
@@ -22,14 +24,17 @@ export class CameraManager {
     this.prevMouseX  = 0;
     this.prevMouseY  = 0;
 
+    this._shakeTime = 0;
     this._onModeChange = null; // callback(modeName)
     this._setupListeners();
   }
 
   /** Called by HUD or external code when user clicks camera button */
   setMode(modeName) {
-    this.mode = modeName;
-    if (this._onModeChange) this._onModeChange(modeName);
+    if (MODES.includes(modeName)) {
+      this.mode = modeName;
+      if (this._onModeChange) this._onModeChange(modeName);
+    }
   }
 
   /** Cycle through modes; returns the new mode name */
@@ -74,15 +79,26 @@ export class CameraManager {
     const carHeading = vehicleController.headingAngle;
     const speedRatio = vehicleController.velocity.length() / vehicleController.maxSpeed;
 
-    if (this.mode === 'chase') {
-      const rotated = this.chaseOffset.clone().applyAxisAngle(
+    // Speed-dependent micro vibration (road texture tactile feel)
+    this._shakeTime += dt * 35.0;
+    const shakeIntensity = (speedRatio * 0.02) + (vehicleController.isOnRoad ? 0 : 0.05);
+    const shakeX = Math.sin(this._shakeTime) * shakeIntensity;
+    const shakeY = Math.cos(this._shakeTime * 1.6) * shakeIntensity * 0.7;
+
+    if (this.mode === 'chase' || this.mode === 'close') {
+      const baseOffset = this.mode === 'close' ? this.closeOffset : this.chaseOffset;
+      const rotated = baseOffset.clone().applyAxisAngle(
         new THREE.Vector3(0, 1, 0), carHeading
       );
-      // Slight lateral sway when steering
-      const steerRollOffset = vehicleController.currentSteerAngle * 1.2;
+
+      // Subtle dynamic lateral sway when steering
+      const steerRollOffset = vehicleController.currentSteerAngle * 0.6;
       rotated.x += Math.sin(carHeading + Math.PI / 2) * steerRollOffset;
 
       const targetPos    = carPos.clone().add(rotated);
+      targetPos.x += shakeX;
+      targetPos.y += shakeY;
+
       const rotatedLookAt = this.lookAtOffset.clone().applyAxisAngle(
         new THREE.Vector3(0, 1, 0), carHeading
       );
@@ -92,37 +108,40 @@ export class CameraManager {
         this.currentPos.copy(targetPos);
         this.currentLookAt.copy(targetLookAt);
       } else {
-        this.currentPos.lerp(targetPos,    10.0 * dt);
-        this.currentLookAt.lerp(targetLookAt, 14.0 * dt);
+        const followSpeed = this.mode === 'close' ? 16.0 : 13.0;
+        this.currentPos.lerp(targetPos,       followSpeed * dt);
+        this.currentLookAt.lerp(targetLookAt, 18.0 * dt);
       }
 
       this.camera.position.copy(this.currentPos);
       this.camera.lookAt(this.currentLookAt);
 
       const targetFov = THREE.MathUtils.lerp(this.baseFov, this.maxFov, speedRatio);
-      this.camera.fov = THREE.MathUtils.lerp(this.camera.fov, targetFov, 5.0 * dt);
+      this.camera.fov = THREE.MathUtils.lerp(this.camera.fov, targetFov, 6.0 * dt);
       this.camera.updateProjectionMatrix();
 
     } else if (this.mode === 'cockpit') {
-      const offset = new THREE.Vector3(0, 0.72, 0.1).applyAxisAngle(
-        new THREE.Vector3(0, 1, 0), carHeading
-      );
-      const lookAt = carPos.clone().add(
-        new THREE.Vector3(Math.sin(carHeading) * 14, 0.5, Math.cos(carHeading) * 14)
-      );
-      this.camera.position.copy(carPos.clone().add(offset));
-      this.camera.lookAt(lookAt);
+      const carEuler = new THREE.Euler(vehicleController.chassisPitch, carHeading, vehicleController.chassisRoll, 'YXZ');
+      const offset = new THREE.Vector3(0, 0.64, 0.05).applyEuler(carEuler);
+      const lookAtVec = new THREE.Vector3(0, 0.58, 16.0).applyEuler(carEuler);
+
+      const eyePos = carPos.clone().add(offset);
+      eyePos.x += shakeX * 0.5;
+      eyePos.y += shakeY * 0.5;
+
+      this.camera.position.copy(eyePos);
+      this.camera.lookAt(carPos.clone().add(lookAtVec));
       this.camera.fov = 72;
       this.camera.updateProjectionMatrix();
 
     } else if (this.mode === 'orbit') {
-      const radius = 10.0;
+      const radius = 9.0;
       const ox = carPos.x + Math.sin(this.orbitYaw) * Math.cos(this.orbitPitch) * radius;
-      const oy = carPos.y + Math.sin(this.orbitPitch) * radius + 1.0;
+      const oy = carPos.y + Math.sin(this.orbitPitch) * radius + 0.8;
       const oz = carPos.z + Math.cos(this.orbitYaw) * Math.cos(this.orbitPitch) * radius;
       this.camera.position.set(ox, oy, oz);
-      this.camera.lookAt(carPos.x, carPos.y + 0.8, carPos.z);
-      this.camera.fov = 62;
+      this.camera.lookAt(carPos.x, carPos.y + 0.6, carPos.z);
+      this.camera.fov = 60;
       this.camera.updateProjectionMatrix();
     }
   }
