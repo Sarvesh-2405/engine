@@ -182,10 +182,12 @@ class GameApp {
   // ── Environment ───────────────────────────────────────────
   _setEnvironment(name) {
     this.atmosphere.setEnvironment(name);
-    // Automatically enable ultra-bright headlights in night mode
     const isNight = name === 'night';
-    this.hud._setHeadlights(isNight);
-    this.hud.setEnvironmentLabel(name);
+    this._setHeadlights(isNight);
+    if (this.hud) {
+      this.hud._setHeadlights(isNight);
+      this.hud.setEnvironmentLabel(name);
+    }
     const idx = this._envList.indexOf(name);
     if (idx >= 0) this._envIdx = idx;
   }
@@ -228,6 +230,8 @@ class GameApp {
   // ── Quality ───────────────────────────────────────────────
   _applyQuality(preset) {
     this.vegetationManager.setQuality(preset);
+    this.atmosphere.setQuality(preset);
+
     switch (preset) {
       case 'ultra':
         this.terrainManager.chunkRadius = 3;
@@ -235,17 +239,17 @@ class GameApp {
         this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.35));
         break;
       case 'high':
-        this.terrainManager.chunkRadius = 2;
+        this.terrainManager.chunkRadius = 3;
         this.renderer.shadowMap.enabled = true;
         this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.25));
         break;
       case 'medium':
-        this.terrainManager.chunkRadius = 2;
+        this.terrainManager.chunkRadius = 3;
         this.renderer.shadowMap.enabled = false;
         this.renderer.setPixelRatio(1.0);
         break;
       case 'low':
-        this.terrainManager.chunkRadius = 1;
+        this.terrainManager.chunkRadius = 2;
         this.renderer.shadowMap.enabled = false;
         this.renderer.setPixelRatio(1.0);
         break;

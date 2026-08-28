@@ -23,9 +23,9 @@ export function fbm(x, y, octaves = 4) {
   return total;
 }
 
-const MAX_ROAD_POINTS  = 650;
-const EXTEND_THRESHOLD = 700;
-const GRID_CELL_SIZE   = 45.0; // Spatial hash cell size in meters
+const EXTEND_THRESHOLD  = 1200; // Extend when car is within 1.2km of the road end
+const MIN_BEHIND_POINTS = 45;   // Keep at least 45 control points (~1.5km) behind car at all times
+const GRID_CELL_SIZE    = 50.0; // Spatial hash cell size in meters
 
 export class RoadSpline {
   constructor(seed = 42) {
@@ -50,7 +50,7 @@ export class RoadSpline {
       : new THREE.Vector3(0, this._baseHeight(0, 0), 0);
     const idx = this.controlPoints.length;
 
-    const turn = (valueNoise(idx * 0.22, 77) - 0.5) * 0.5;
+    const turn = (valueNoise(idx * 0.22, 77) - 0.5) * 0.48;
     this.headingSeed += turn;
 
     const nx = last.x + Math.sin(this.headingSeed) * this.cpSpacing;
@@ -62,14 +62,17 @@ export class RoadSpline {
   _initSpline() {
     const originY = this._baseHeight(0, 0);
     this.controlPoints.push(new THREE.Vector3(0, originY, 0));
-    for (let i = 0; i < 70; i++) this._addControlPoint();
+    for (let i = 0; i < 90; i++) this._addControlPoint();
     this.rebuild();
   }
 
   rebuild() {
+    if (this.controlPoints.length < 4) return;
+
     this.curve = new THREE.CatmullRomCurve3(this.controlPoints, false, 'catmullrom', 0.5);
     const totalLen = this.curve.getLength();
-    const num = Math.min(MAX_ROAD_POINTS, Math.max(2, Math.floor(totalLen / 2.2)));
+    // 1 sample per ~3 meters along the spline
+    const num = Math.max(20, Math.floor(totalLen / 3.0));
     const pts = this.curve.getSpacedPoints(num);
 
     const roadData = [];
@@ -115,7 +118,7 @@ export class RoadSpline {
 
     // ── Build Fast Spatial Grid ──────────────────────────────
     this.spatialGrid.clear();
-    const pad = 12.0; // road query padding
+    const pad = 18.0;
 
     for (let i = 0; i < roadData.length - 1; i++) {
       const p1 = roadData[i];
@@ -146,15 +149,30 @@ export class RoadSpline {
   }
 
   extendIfNecessary(carPos) {
+    if (!this.controlPoints.length) return false;
+
     const last = this.controlPoints[this.controlPoints.length - 1];
     const distToLast = last.distanceTo(carPos);
 
     if (distToLast < EXTEND_THRESHOLD) {
-      for (let i = 0; i < 20; i++) this._addControlPoint();
+      // 1. Add 35 new control points ahead (~1.2km)
+      for (let i = 0; i < 35; i++) this._addControlPoint();
 
-      if (this.controlPoints.length > 100) {
-        const excess = this.controlPoints.length - 100;
-        this.controlPoints.splice(0, excess);
+      // 2. Find the control point closest to the car's current position
+      let closestIdx = 0;
+      let minDistSq = Infinity;
+      for (let i = 0; i < this.controlPoints.length; i++) {
+        const d2 = this.controlPoints[i].distanceToSquared(carPos);
+        if (d2 < minDistSq) {
+          minDistSq = d2;
+          closestIdx = i;
+        }
+      }
+
+      // 3. ONLY prune points that are far BEHIND the car (keeping at least 45 points / ~1.5km behind)
+      if (closestIdx > (MIN_BEHIND_POINTS + 15)) {
+        const pruneCount = closestIdx - MIN_BEHIND_POINTS;
+        this.controlPoints.splice(0, pruneCount);
       }
 
       this.rebuild();
@@ -169,15 +187,8 @@ export class RoadSpline {
       return { distance: Infinity, height: 0, point: null, crossOffset: 0, banking: 0, curvature: 0 };
     }
 
-    const cellX = Math.floor(x / GRID_CELL_SIZE);
-    const cellZ = Math.floor(z / GRID_CELL_SIZE);
-    const key = `${cellX},${cellZ}`;
-    const candidateIndices = this.spatialGrid.get(key);
-
-    // If point is far from any road cell, return Infinity in O(1)
-    if (!candidateIndices || candidateIndices.length === 0) {
-      return { distance: Infinity, height: 0, point: null, crossOffset: 0, banking: 0, curvature: 0 };
-    }
+    const centerCellX = Math.floor(x / GRID_CELL_SIZE);
+    const centerCellZ = Math.floor(z / GRID_CELL_SIZE);
 
     let minSq = Infinity;
     let closestY = 0;
@@ -186,40 +197,55 @@ export class RoadSpline {
     let closestBanking = 0;
     let closestCurvature = 0;
     let closestTangent = null;
+    let testedCount = 0;
 
-    for (let k = 0; k < candidateIndices.length; k++) {
-      const i = candidateIndices[k];
-      const p1 = pts[i];
-      const p2 = pts[i + 1];
-      if (!p2) continue;
+    // Query 3x3 neighboring cells to ensure 100% continuous coverage across cell borders
+    for (let dx = -1; dx <= 1; dx++) {
+      for (let dz = -1; dz <= 1; dz++) {
+        const key = `${centerCellX + dx},${centerCellZ + dz}`;
+        const candidateIndices = this.spatialGrid.get(key);
+        if (!candidateIndices) continue;
 
-      const abx = p2.x - p1.x, abz = p2.z - p1.z;
-      const apx = x - p1.x,   apz = z - p1.z;
-      const ab2 = abx * abx + abz * abz;
-      const t   = ab2 === 0 ? 0 : Math.max(0, Math.min(1, (apx * abx + apz * abz) / ab2));
-      const projX = p1.x + t * abx;
-      const projZ = p1.z + t * abz;
-      const dx  = x - projX;
-      const dz  = z - projZ;
-      const d2  = dx * dx + dz * dz;
+        for (let k = 0; k < candidateIndices.length; k++) {
+          const i = candidateIndices[k];
+          const p1 = pts[i];
+          const p2 = pts[i + 1];
+          if (!p2) continue;
 
-      if (d2 < minSq) {
-        minSq = d2;
-        closestY = p1.y + t * (p2.y - p1.y);
-        closestPt = p1;
-        closestBanking = p1.banking + t * (p2.banking - p1.banking);
-        closestCurvature = p1.curvature + t * (p2.curvature - p1.curvature);
-        closestTangent = p1.tangent;
+          testedCount++;
+          const abx = p2.x - p1.x, abz = p2.z - p1.z;
+          const apx = x - p1.x,   apz = z - p1.z;
+          const ab2 = abx * abx + abz * abz;
+          const t   = ab2 === 0 ? 0 : Math.max(0, Math.min(1, (apx * abx + apz * abz) / ab2));
+          const projX = p1.x + t * abx;
+          const projZ = p1.z + t * abz;
+          const pdx = x - projX;
+          const pdz = z - projZ;
+          const d2  = pdx * pdx + pdz * pdz;
 
-        const cross = dx * p1.normal.x + dz * p1.normal.z;
-        closestCrossOffset = cross;
+          if (d2 < minSq) {
+            minSq = d2;
+            closestY = p1.y + t * (p2.y - p1.y);
+            closestPt = p1;
+            closestBanking = p1.banking + t * (p2.banking - p1.banking);
+            closestCurvature = p1.curvature + t * (p2.curvature - p1.curvature);
+            closestTangent = p1.tangent;
+
+            const cross = pdx * p1.normal.x + pdz * p1.normal.z;
+            closestCrossOffset = cross;
+          }
+        }
       }
+    }
+
+    if (testedCount === 0 || !isFinite(minSq)) {
+      return { distance: Infinity, height: 0, point: null, crossOffset: 0, banking: 0, curvature: 0 };
     }
 
     const adjustedHeight = closestY + (closestCrossOffset * Math.sin(closestBanking));
 
     return {
-      distance: isFinite(minSq) ? Math.sqrt(minSq) : Infinity,
+      distance: Math.sqrt(minSq),
       height:   adjustedHeight,
       rawHeight: closestY,
       point:    closestPt,

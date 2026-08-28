@@ -81,17 +81,29 @@ export class TerrainManager {
       }
     }
 
-    // Sort missing chunks so the nearest chunk is built first
+    // Sort missing chunks so the nearest chunk in front of car is built first
     if (missingChunks.length > 0) {
       missingChunks.sort((a, b) => a.distSq - b.distSq);
-      // Create at most 1 chunk per frame to keep FPS locked at 60+ with zero stutters
-      const { cx, cz, key } = missingChunks[0];
-      const mesh = this._createChunk(cx, cz);
-      this.activeChunks.set(key, mesh);
-      this.scene.add(mesh);
+      // Stream up to 2 chunks per frame to keep forward road populated without frame hitches
+      const chunksToBuild = Math.min(2, missingChunks.length);
+      for (let i = 0; i < chunksToBuild; i++) {
+        const { cx, cz, key } = missingChunks[i];
+        const mesh = this._createChunk(cx, cz);
+        this.activeChunks.set(key, mesh);
+        this.scene.add(mesh);
+      }
     }
 
+    // Smoothly ease in new chunks so terrain & trees glide in without popping
     for (const [key, mesh] of this.activeChunks.entries()) {
+      if (mesh._spawnT !== undefined && mesh._spawnT < 1.0) {
+        mesh._spawnT = Math.min(1.0, mesh._spawnT + (dt || 0.016) * 4.5);
+        const t = mesh._spawnT;
+        const ease = t * t * (3.0 - 2.0 * t); // cubic smoothstep
+        mesh.position.y = (1.0 - ease) * -8.0;
+        mesh.scale.set(1.0, 0.5 + ease * 0.5, 1.0);
+      }
+
       if (!neededKeys.has(key)) {
         this.scene.remove(mesh);
         mesh.geometry.dispose();
@@ -200,7 +212,9 @@ export class TerrainManager {
     geometry.computeVertexNormals();
 
     const mesh = new THREE.Mesh(geometry, this.terrainMaterial);
-    mesh.position.set(originX, 0, originZ);
+    mesh._spawnT = 0.0;
+    mesh.position.set(originX, -8.0, originZ);
+    mesh.scale.set(1.0, 0.5, 1.0);
     mesh.receiveShadow = true;
 
     if (this.vegetationManager) {

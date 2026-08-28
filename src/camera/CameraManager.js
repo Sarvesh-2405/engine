@@ -129,17 +129,39 @@ export class CameraManager {
       this.camera.updateProjectionMatrix();
 
     } else if (this.mode === 'cockpit') {
-      const carEuler = new THREE.Euler(vehicleController.chassisPitch, carHeading, vehicleController.chassisRoll, 'YXZ');
-      const offset = new THREE.Vector3(0, 0.64, 0.05).applyEuler(carEuler);
-      const lookAtVec = new THREE.Vector3(0, 0.58, 16.0).applyEuler(carEuler);
+      // Smoothly dampen pitch and roll so chassis bumps don't violently jerk the driver's eyes
+      const smoothPitch = vehicleController.chassisPitch * 0.40;
+      const smoothRoll  = vehicleController.chassisRoll * 0.40;
+      const carEuler    = new THREE.Euler(smoothPitch, carHeading, smoothRoll, 'YXZ');
 
-      const eyePos = carPos.clone().add(offset);
-      eyePos.x += shakeX * 0.5;
-      eyePos.y += shakeY * 0.5;
+      // Driver helmet position: elevated above cockpit rim for clear road sightlines
+      const eyeOffset  = new THREE.Vector3(0, 0.88, 0.42).applyEuler(carEuler);
+      const lookOffset = new THREE.Vector3(0, 0.82, 32.0).applyEuler(carEuler);
 
-      this.camera.position.copy(eyePos);
-      this.camera.lookAt(carPos.clone().add(lookAtVec));
-      this.camera.fov = 72;
+      const targetEye    = carPos.clone().add(eyeOffset);
+      const targetLookAt = carPos.clone().add(lookOffset);
+
+      // Subtle high-speed micro rumble
+      if (speedRatio > 0.2) {
+        targetEye.x += shakeX * 0.15;
+        targetEye.y += shakeY * 0.15;
+      }
+
+      if (this.currentPos.lengthSq() === 0) {
+        this.currentPos.copy(targetEye);
+        this.currentLookAt.copy(targetLookAt);
+      } else {
+        // High-frequency tracking with smooth suspension stabilization
+        this.currentPos.lerp(targetEye, Math.min(1.0, 30.0 * dt));
+        this.currentLookAt.lerp(targetLookAt, Math.min(1.0, 34.0 * dt));
+      }
+
+      this.camera.position.copy(this.currentPos);
+      this.camera.lookAt(this.currentLookAt);
+
+      // Dynamic FOV for speed sensation
+      const targetFov = THREE.MathUtils.lerp(72, 88, speedRatio);
+      this.camera.fov = THREE.MathUtils.lerp(this.camera.fov, targetFov, 8.0 * dt);
       this.camera.updateProjectionMatrix();
 
     } else if (this.mode === 'orbit') {
