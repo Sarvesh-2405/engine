@@ -20,7 +20,7 @@ class GameApp {
       logarithmicDepthBuffer: true,   // prevents Z-fighting on road surfaces
     });
     this.renderer.setSize(window.innerWidth, window.innerHeight);
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.25));
 
     // Enable soft shadow mapping by default
     this.renderer.shadowMap.enabled = true;
@@ -84,8 +84,9 @@ class GameApp {
     this._envList = ['daylight', 'morning', 'sunset', 'night'];
     this._envIdx  = 0;
 
-    // ── Input ─────────────────────────────────────────────
+    // ── Input & Default State ─────────────────────────────
     this.keys = {};
+    this._applyQuality('high');
     this._placeCarOnRoad(0.02);
     this._initInput();
     window.addEventListener('resize', () => this._onResize());
@@ -106,11 +107,6 @@ class GameApp {
     // Twin high-power Xenon high-beam SpotLights
     this.headlightL = new THREE.SpotLight(0xfff8ee, 0, 260, Math.PI / 4.2, 0.55, 1.0);
     this.headlightR = new THREE.SpotLight(0xfff8ee, 0, 260, Math.PI / 4.2, 0.55, 1.0);
-
-    this.headlightL.castShadow = true;
-    this.headlightL.shadow.mapSize.width = 1024;
-    this.headlightL.shadow.mapSize.height = 1024;
-    this.headlightL.shadow.bias = -0.001;
 
     this.scene.add(this.headlightL, this.headlightL.target);
     this.scene.add(this.headlightR, this.headlightR.target);
@@ -231,29 +227,31 @@ class GameApp {
 
   // ── Quality ───────────────────────────────────────────────
   _applyQuality(preset) {
+    this.vegetationManager.setQuality(preset);
     switch (preset) {
       case 'ultra':
         this.terrainManager.chunkRadius = 3;
         this.renderer.shadowMap.enabled = true;
-        this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.35));
         break;
       case 'high':
         this.terrainManager.chunkRadius = 2;
         this.renderer.shadowMap.enabled = true;
-        this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+        this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.25));
         break;
       case 'medium':
         this.terrainManager.chunkRadius = 2;
         this.renderer.shadowMap.enabled = false;
-        this.renderer.setPixelRatio(1);
+        this.renderer.setPixelRatio(1.0);
         break;
       case 'low':
         this.terrainManager.chunkRadius = 1;
         this.renderer.shadowMap.enabled = false;
-        this.renderer.setPixelRatio(1);
+        this.renderer.setPixelRatio(1.0);
         break;
     }
-    this.terrainManager.update(this.vehicleController.position);
+    this.terrainManager.repopulateChunks();
+    this.terrainManager.update(this.vehicleController.position, 0.016);
   }
 
   // ── Input ─────────────────────────────────────────────────
@@ -267,6 +265,9 @@ class GameApp {
 
       // Road barrier cycle
       if (k === 'b') this.hud.cycleBarrierMode();
+
+      // Mute toggle: M
+      if (k === 'm') this.hud.toggleMute();
 
       // Environment cycle: E = next, Q = prev
       if (k === 'e') {
@@ -320,11 +321,12 @@ class GameApp {
       this._rebuildRoadMesh();
     }
 
-    // Stream terrain chunks
-    this.terrainManager.update(this.vehicleController.position);
+    // Stream terrain chunks & water wave updates
+    this.terrainManager.update(this.vehicleController.position, dt);
+    this.vegetationManager.update(dt);
 
-    // Sky / sun tracking
-    this.atmosphere.update(this.vehicleController.position);
+    // Sky / sun / cloud tracking
+    this.atmosphere.update(this.vehicleController.position, dt);
 
     // Headlights
     this._updateHeadlightPositions();

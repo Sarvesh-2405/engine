@@ -93,15 +93,15 @@ export class Atmosphere {
     // Main sun directional light
     this.sunLight = new THREE.DirectionalLight(0xffffff, 1.55);
     this.sunLight.castShadow = true;
-    this.sunLight.shadow.camera.left   = -140;
-    this.sunLight.shadow.camera.right  =  140;
-    this.sunLight.shadow.camera.top    =  140;
-    this.sunLight.shadow.camera.bottom = -140;
+    this.sunLight.shadow.camera.left   = -95;
+    this.sunLight.shadow.camera.right  =  95;
+    this.sunLight.shadow.camera.top    =  95;
+    this.sunLight.shadow.camera.bottom = -95;
     this.sunLight.shadow.camera.near   = 0.5;
-    this.sunLight.shadow.camera.far    = 500;
-    this.sunLight.shadow.mapSize.width  = 2048;
-    this.sunLight.shadow.mapSize.height = 2048;
-    this.sunLight.shadow.bias = -0.0002;
+    this.sunLight.shadow.camera.far    = 400;
+    this.sunLight.shadow.mapSize.width  = 1024;
+    this.sunLight.shadow.mapSize.height = 1024;
+    this.sunLight.shadow.bias = -0.0003;
     this.sunLight.shadow.normalBias = 0.02;
     this.scene.add(this.sunLight);
     this.scene.add(this.sunLight.target);

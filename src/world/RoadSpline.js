@@ -23,8 +23,9 @@ export function fbm(x, y, octaves = 4) {
   return total;
 }
 
-const MAX_ROAD_POINTS = 700; // keep loop short to avoid jank
-const EXTEND_THRESHOLD = 800; // metres to last control point before extending
+const MAX_ROAD_POINTS  = 650;
+const EXTEND_THRESHOLD = 700;
+const GRID_CELL_SIZE   = 45.0; // Spatial hash cell size in meters
 
 export class RoadSpline {
   constructor(seed = 42) {
@@ -34,6 +35,7 @@ export class RoadSpline {
     this.headingSeed   = 0;
     this.cpSpacing     = 35;
     this.heightScale   = 12;
+    this.spatialGrid   = new Map();
 
     this._initSpline();
   }
@@ -48,7 +50,6 @@ export class RoadSpline {
       : new THREE.Vector3(0, this._baseHeight(0, 0), 0);
     const idx = this.controlPoints.length;
 
-    // Smooth winding — natural flowing turns
     const turn = (valueNoise(idx * 0.22, 77) - 0.5) * 0.5;
     this.headingSeed += turn;
 
@@ -61,14 +62,14 @@ export class RoadSpline {
   _initSpline() {
     const originY = this._baseHeight(0, 0);
     this.controlPoints.push(new THREE.Vector3(0, originY, 0));
-    for (let i = 0; i < 80; i++) this._addControlPoint();
+    for (let i = 0; i < 70; i++) this._addControlPoint();
     this.rebuild();
   }
 
   rebuild() {
     this.curve = new THREE.CatmullRomCurve3(this.controlPoints, false, 'catmullrom', 0.5);
     const totalLen = this.curve.getLength();
-    const num = Math.min(MAX_ROAD_POINTS, Math.max(2, Math.floor(totalLen / 2.0)));
+    const num = Math.min(MAX_ROAD_POINTS, Math.max(2, Math.floor(totalLen / 2.2)));
     const pts = this.curve.getSpacedPoints(num);
 
     const roadData = [];
@@ -77,16 +78,13 @@ export class RoadSpline {
     for (let i = 0; i < pts.length; i++) {
       const p = pts[i];
       if (i > 0) {
-        const prev = pts[i - 1];
-        cumDist += p.distanceTo(prev);
+        cumDist += p.distanceTo(pts[i - 1]);
       }
 
       const t = Math.min(i / (pts.length - 1), 0.9999);
       const tangent = this.curve.getTangentAt(t).normalize();
-      // Horizontal perpendicular
       const normal2D = new THREE.Vector3(-tangent.z, 0, tangent.x).normalize();
 
-      // Estimate curvature from surrounding tangents
       let curvature = 0;
       if (i > 0 && i < pts.length - 1) {
         const tPrev = Math.max(0, (i - 1) / (pts.length - 1));
@@ -98,7 +96,6 @@ export class RoadSpline {
         curvature = segDist > 0.001 ? crossY / segDist : 0;
       }
 
-      // Banking angle (superelevation inward into turns, up to ~4 degrees)
       const banking = THREE.MathUtils.clamp(-curvature * 14.0, -0.07, 0.07);
 
       roadData.push({
@@ -115,6 +112,37 @@ export class RoadSpline {
     }
 
     this.roadPoints = roadData;
+
+    // ── Build Fast Spatial Grid ──────────────────────────────
+    this.spatialGrid.clear();
+    const pad = 12.0; // road query padding
+
+    for (let i = 0; i < roadData.length - 1; i++) {
+      const p1 = roadData[i];
+      const p2 = roadData[i + 1];
+
+      const minX = Math.min(p1.x, p2.x) - pad;
+      const maxX = Math.max(p1.x, p2.x) + pad;
+      const minZ = Math.min(p1.z, p2.z) - pad;
+      const maxZ = Math.max(p1.z, p2.z) + pad;
+
+      const minCellX = Math.floor(minX / GRID_CELL_SIZE);
+      const maxCellX = Math.floor(maxX / GRID_CELL_SIZE);
+      const minCellZ = Math.floor(minZ / GRID_CELL_SIZE);
+      const maxCellZ = Math.floor(maxZ / GRID_CELL_SIZE);
+
+      for (let cx = minCellX; cx <= maxCellX; cx++) {
+        for (let cz = minCellZ; cz <= maxCellZ; cz++) {
+          const key = `${cx},${cz}`;
+          let cell = this.spatialGrid.get(key);
+          if (!cell) {
+            cell = [];
+            this.spatialGrid.set(key, cell);
+          }
+          cell.push(i);
+        }
+      }
+    }
   }
 
   extendIfNecessary(carPos) {
@@ -122,12 +150,10 @@ export class RoadSpline {
     const distToLast = last.distanceTo(carPos);
 
     if (distToLast < EXTEND_THRESHOLD) {
-      // Add more road ahead
-      for (let i = 0; i < 25; i++) this._addControlPoint();
+      for (let i = 0; i < 20; i++) this._addControlPoint();
 
-      // Prune OLD control points that are far behind the car
-      if (this.controlPoints.length > 120) {
-        const excess = this.controlPoints.length - 120;
+      if (this.controlPoints.length > 100) {
+        const excess = this.controlPoints.length - 100;
         this.controlPoints.splice(0, excess);
       }
 
@@ -143,6 +169,16 @@ export class RoadSpline {
       return { distance: Infinity, height: 0, point: null, crossOffset: 0, banking: 0, curvature: 0 };
     }
 
+    const cellX = Math.floor(x / GRID_CELL_SIZE);
+    const cellZ = Math.floor(z / GRID_CELL_SIZE);
+    const key = `${cellX},${cellZ}`;
+    const candidateIndices = this.spatialGrid.get(key);
+
+    // If point is far from any road cell, return Infinity in O(1)
+    if (!candidateIndices || candidateIndices.length === 0) {
+      return { distance: Infinity, height: 0, point: null, crossOffset: 0, banking: 0, curvature: 0 };
+    }
+
     let minSq = Infinity;
     let closestY = 0;
     let closestPt = null;
@@ -151,8 +187,12 @@ export class RoadSpline {
     let closestCurvature = 0;
     let closestTangent = null;
 
-    for (let i = 0; i < pts.length - 1; i++) {
-      const p1 = pts[i], p2 = pts[i + 1];
+    for (let k = 0; k < candidateIndices.length; k++) {
+      const i = candidateIndices[k];
+      const p1 = pts[i];
+      const p2 = pts[i + 1];
+      if (!p2) continue;
+
       const abx = p2.x - p1.x, abz = p2.z - p1.z;
       const apx = x - p1.x,   apz = z - p1.z;
       const ab2 = abx * abx + abz * abz;
@@ -171,13 +211,11 @@ export class RoadSpline {
         closestCurvature = p1.curvature + t * (p2.curvature - p1.curvature);
         closestTangent = p1.tangent;
 
-        // Signed cross-track distance (positive to right of tangent, negative to left)
         const cross = dx * p1.normal.x + dz * p1.normal.z;
         closestCrossOffset = cross;
       }
     }
 
-    // Height adjusted for road banking across the road cross section
     const adjustedHeight = closestY + (closestCrossOffset * Math.sin(closestBanking));
 
     return {

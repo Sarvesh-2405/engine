@@ -79,11 +79,19 @@ export class CameraManager {
     const carHeading = vehicleController.headingAngle;
     const speedRatio = vehicleController.velocity.length() / vehicleController.maxSpeed;
 
-    // Speed-dependent micro vibration (road texture tactile feel)
-    this._shakeTime += dt * 35.0;
-    const shakeIntensity = (speedRatio * 0.02) + (vehicleController.isOnRoad ? 0 : 0.05);
-    const shakeX = Math.sin(this._shakeTime) * shakeIntensity;
-    const shakeY = Math.cos(this._shakeTime * 1.6) * shakeIntensity * 0.7;
+    // Speed-dependent micro vibration (only active when moving)
+    const speed = vehicleController.velocity.length();
+    let shakeX = 0;
+    let shakeY = 0;
+
+    if (speed > 0.5) {
+      this._shakeTime += dt * 28.0;
+      const shakeIntensity = (speedRatio * 0.012) + (vehicleController.isOnRoad ? 0 : speedRatio * 0.025);
+      shakeX = Math.sin(this._shakeTime) * shakeIntensity;
+      shakeY = Math.cos(this._shakeTime * 1.6) * shakeIntensity * 0.7;
+    } else {
+      this._shakeTime = 0;
+    }
 
     if (this.mode === 'chase' || this.mode === 'close') {
       const baseOffset = this.mode === 'close' ? this.closeOffset : this.chaseOffset;

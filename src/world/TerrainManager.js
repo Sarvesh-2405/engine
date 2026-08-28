@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import { fbm } from './RoadSpline.js';
 
+import { WaterSystem } from '../graphics/WaterSystem.js';
+
 // ── Slow Roads–style terrain palette ──────────────────────
 const COLOR_WATER_DEEP  = new THREE.Color(0x3b82f6); // Blue water
 const COLOR_BEACH       = new THREE.Color(0xd4b483); // Sandy shore
@@ -30,24 +32,7 @@ export class TerrainManager {
       metalness: 0.0,
     });
 
-    this._initWater();
-  }
-
-  // ── Water plane ────────────────────────────────────────
-  _initWater() {
-    const waterGeo = new THREE.PlaneGeometry(20000, 20000, 4, 4);
-    const waterMat = new THREE.MeshStandardMaterial({
-      color: 0x4a90d9,
-      roughness: 0.05,
-      metalness: 0.15,
-      transparent: true,
-      opacity: 0.88,
-    });
-    waterGeo.rotateX(-Math.PI / 2);
-    this.waterMesh = new THREE.Mesh(waterGeo, waterMat);
-    this.waterMesh.position.y = WATER_LEVEL;
-    this.waterMesh.receiveShadow = false;
-    this.scene.add(this.waterMesh);
+    this.waterSystem = new WaterSystem(this.scene, WATER_LEVEL);
   }
 
   getElevationAt(x, z) {
@@ -71,16 +56,16 @@ export class TerrainManager {
     return raw;
   }
 
-  update(carPosition) {
-    // Track water plane with car
-    if (this.waterMesh) {
-      this.waterMesh.position.x = carPosition.x;
-      this.waterMesh.position.z = carPosition.z;
+  update(carPosition, dt = 0.016) {
+    // Update water waves and tracking
+    if (this.waterSystem) {
+      this.waterSystem.update(dt, carPosition);
     }
 
     const currentChunkX = Math.round(carPosition.x / this.chunkSize);
     const currentChunkZ = Math.round(carPosition.z / this.chunkSize);
     const neededKeys = new Set();
+    const missingChunks = [];
 
     for (let dx = -this.chunkRadius; dx <= this.chunkRadius; dx++) {
       for (let dz = -this.chunkRadius; dz <= this.chunkRadius; dz++) {
@@ -90,11 +75,20 @@ export class TerrainManager {
         neededKeys.add(key);
 
         if (!this.activeChunks.has(key)) {
-          const mesh = this._createChunk(cx, cz);
-          this.activeChunks.set(key, mesh);
-          this.scene.add(mesh);
+          const distSq = dx * dx + dz * dz;
+          missingChunks.push({ cx, cz, key, distSq });
         }
       }
+    }
+
+    // Sort missing chunks so the nearest chunk is built first
+    if (missingChunks.length > 0) {
+      missingChunks.sort((a, b) => a.distSq - b.distSq);
+      // Create at most 1 chunk per frame to keep FPS locked at 60+ with zero stutters
+      const { cx, cz, key } = missingChunks[0];
+      const mesh = this._createChunk(cx, cz);
+      this.activeChunks.set(key, mesh);
+      this.scene.add(mesh);
     }
 
     for (const [key, mesh] of this.activeChunks.entries()) {
@@ -104,6 +98,14 @@ export class TerrainManager {
         this.activeChunks.delete(key);
       }
     }
+  }
+
+  repopulateChunks() {
+    for (const [key, mesh] of this.activeChunks.entries()) {
+      this.scene.remove(mesh);
+      mesh.geometry.dispose();
+    }
+    this.activeChunks.clear();
   }
 
   _createChunk(cx, cz) {

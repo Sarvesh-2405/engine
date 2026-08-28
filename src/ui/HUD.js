@@ -1,3 +1,5 @@
+import { SoundManager } from '../audio/SoundManager.js';
+
 export class HUD {
   constructor(options = {}) {
     this.container = document.getElementById('hud');
@@ -23,9 +25,10 @@ export class HUD {
 
     this.touchSteer = 0; this.touchAccel = 0; this.touchBrake = 0;
 
+    this.soundManager = new SoundManager();
+
     this._render();
     this._setupEvents();
-    this._initAudio();
   }
 
   // ── Minimap data ───────────────────────────────────────
@@ -118,6 +121,12 @@ export class HUD {
             <span style="font-size:0.82rem;font-weight:600;opacity:0.85;">💡 Car Headlights</span>
             <div class="toggle-switch" id="headlightToggle"></div>
           </div>
+
+          <p class="settings-label" style="margin-top:1.1rem;">Audio & Sound &nbsp;<small style="font-size:0.65em;font-weight:400;opacity:0.5;">(M)</small></p>
+          <div class="headlight-row" id="soundRow">
+            <span style="font-size:0.82rem;font-weight:600;opacity:0.85;" id="soundLabel">🔊 Engine & Wind Audio</span>
+            <div class="toggle-switch active" id="soundToggle"></div>
+          </div>
         </div>
 
         <!-- CAMERA tab -->
@@ -143,12 +152,12 @@ export class HUD {
         <div class="stab-content" id="tab-graphics">
           <p class="settings-label">Quality Preset</p>
           <div class="quality-seg" id="qualitySeg">
-            <button class="qseg active" data-q="ultra">Ultra</button>
-            <button class="qseg" data-q="high">High</button>
+            <button class="qseg" data-q="ultra">Ultra</button>
+            <button class="qseg active" data-q="high">High</button>
             <button class="qseg" data-q="medium">Medium</button>
             <button class="qseg" data-q="low">Low</button>
           </div>
-          <div class="quality-desc" id="qualityDesc">Ultra: 2K soft shadows, full vegetation, ACES HDR</div>
+          <div class="quality-desc" id="qualityDesc">High: Balanced tree density & 1K soft shadows (Default)</div>
         </div>
 
         <!-- CONTROLS tab -->
@@ -215,6 +224,15 @@ export class HUD {
     // Headlights
     this.headlightRow.addEventListener('click', () => this._toggleHeadlights());
 
+    // Sound Mute Toggle
+    this.soundToggle = document.getElementById('soundToggle');
+    this.soundLabel  = document.getElementById('soundLabel');
+    this._muted = false;
+    const soundRow = document.getElementById('soundRow');
+    if (soundRow) {
+      soundRow.addEventListener('click', () => this.toggleMute());
+    }
+
     // Tabs
     document.querySelectorAll('.stab').forEach(btn => {
       btn.addEventListener('click', () => {
@@ -252,10 +270,10 @@ export class HUD {
 
     // Quality segment
     const descs = {
-      ultra:  'Ultra: 2K soft shadows, full vegetation, ACES HDR',
-      high:   'High: 1K soft shadows, full vegetation',
-      medium: 'Medium: Reduced shadows, reduced vegetation',
-      low:    'Low: Minimal shadows, minimal vegetation',
+      ultra:  'Ultra: Lush dense forests & 1K soft shadows',
+      high:   'High: Balanced tree density & 1K soft shadows (Default)',
+      medium: 'Medium: Lighter tree density & disabled shadows for laptop performance',
+      low:    'Low: Minimal sparse trees & maximum battery/framerate',
     };
     document.querySelectorAll('.qseg').forEach(btn => {
       btn.addEventListener('click', () => {
@@ -339,6 +357,14 @@ export class HUD {
     return nextMode;
   }
 
+  toggleMute() {
+    this._muted = !this._muted;
+    if (this.soundToggle) this.soundToggle.classList.toggle('active', !this._muted);
+    if (this.soundLabel) this.soundLabel.textContent = this._muted ? '🔇 Audio Muted' : '🔊 Engine & Wind Audio';
+    this.soundManager.setMuted(this._muted);
+    return this._muted;
+  }
+
   // ── Public sync methods ────────────────────────────────
   setCameraModeLabel(modeName) {
     document.querySelectorAll('.cam-tile').forEach(t => {
@@ -363,35 +389,6 @@ export class HUD {
     this._setEnvTile(env);
     this.onEnvironmentChange(env);
     return env;
-  }
-
-  // ── Audio ──────────────────────────────────────────────
-  _initAudio() {
-    try {
-      this._audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-      this._oscNode  = this._audioCtx.createOscillator();
-      this._gainNode = this._audioCtx.createGain();
-      this._oscNode.type = 'sawtooth';
-      this._oscNode.frequency.value = 55;
-      this._gainNode.gain.value     = 0;
-      this._oscNode.connect(this._gainNode);
-      this._gainNode.connect(this._audioCtx.destination);
-      this._oscNode.start();
-      this._audioReady = true;
-      const resume = () => { if (this._audioCtx.state === 'suspended') this._audioCtx.resume(); };
-      window.addEventListener('keydown', resume, { once: true });
-      window.addEventListener('click',   resume, { once: true });
-    } catch (e) { this._audioReady = false; }
-  }
-
-  _updateAudio(speedKmh, rpm) {
-    if (!this._audioReady) return;
-    const safeRpm   = isFinite(rpm)      ? rpm      : 0;
-    const safeSpeed = isFinite(speedKmh) ? speedKmh : 0;
-    const freq = 55 + (safeRpm / 14000) * 165;
-    this._oscNode.frequency.setTargetAtTime(freq, this._audioCtx.currentTime, 0.06);
-    const vol = safeSpeed > 5 ? Math.min(0.08, 0.01 + (safeSpeed / 800) * 0.07) : 0;
-    this._gainNode.gain.setTargetAtTime(vol, this._audioCtx.currentTime, 0.12);
   }
 
   // ── Minimap ────────────────────────────────────────────
@@ -459,7 +456,7 @@ export class HUD {
     this.boostFillEl.style.width = isBoosting ? '100%' : '0%';
     this.boostFillEl.classList.toggle('boosting', !!isBoosting);
 
-    this._updateAudio(safeSpeed, safeRpm);
+    this.soundManager.update(safeSpeed, safeRpm, isBoosting);
     this._drawMinimap();
   }
 }
