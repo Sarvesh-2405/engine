@@ -11,6 +11,7 @@ export class HUD {
     this.onAutodriveChange   = options.onAutodriveChange   || (() => {});
     this.onHeadlightChange   = options.onHeadlightChange   || (() => {});
     this.onBarrierChange     = options.onBarrierChange     || (() => {});
+    this.onToggleDebugPanel  = options.onToggleDebugPanel  || (() => {});
 
     this._autodriveOn    = false;
     this._headlightsOn   = false;
@@ -50,6 +51,7 @@ export class HUD {
     this.container.innerHTML = `
       <!-- TOP-RIGHT pills -->
       <div class="hud-topright">
+        <button class="hud-pill" id="btnDebugPanel" title="Toggle Tweak Panel (P or ~)">🎛️ <span class="pill-text">Debug Panel</span></button>
         <button class="hud-pill" id="btnBarrier" title="Cycle Barriers (B)">🛡️ <span class="pill-text" id="barrierPillText">Barriers: Dynamic</span></button>
         <button class="hud-pill" id="btnAutodrive">🤖 <span class="pill-text">Autodrive</span></button>
         <button class="hud-pill" id="btnRespawn">🔄 <span class="pill-text">Respawn</span></button>
@@ -206,6 +208,10 @@ export class HUD {
     document.getElementById('btnSettings').addEventListener('click', () => this._openSettings());
     document.getElementById('btnCloseSettings').addEventListener('click', () => this._closeSettings());
     document.getElementById('settingsBackdrop').addEventListener('click', () => this._closeSettings());
+
+    // Debug Panel toggle
+    const btnDebug = document.getElementById('btnDebugPanel');
+    if (btnDebug) btnDebug.addEventListener('click', () => this.onToggleDebugPanel());
 
     // Respawn
     document.getElementById('btnRespawn').addEventListener('click', () => this.onResetCar());

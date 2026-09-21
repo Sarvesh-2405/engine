@@ -1,9 +1,10 @@
 import * as THREE from 'three';
+import { CloudSystem } from './CloudSystem.js';
 
 // ── Slow Roads–inspired environment presets ───────────────
-const PRESETS = {
+export const PRESETS = {
   daylight: {
-    skyTop:       0x4a90d0,  // Slow Roads bright cornflower blue
+    skyTop:       0x4a90d0,  // Bright cornflower blue
     skyMid:       0x7ec8e3,  // Light horizon blue
     skyBottom:    0xc8e8f5,  // Near-horizon pale
     fogColor:     0xbaddf0,
@@ -60,14 +61,14 @@ const PRESETS = {
     fogColor:     0x030818,
     fogDensity:   0.00065,
     sunOffset:    new THREE.Vector3(80, 180, 80),
-    sunIntensity: 0.10,      // Moonlight only — trees stay dark & moody
-    sunColor:     0x6080b0,  // Faint cool moonlight
+    sunIntensity: 0.10,      // Moonlight
+    sunColor:     0x6080b0,  // Cool moonlight
     hemiSky:      0x050c1e,
     hemiGround:   0x010206,
-    hemiIntensity: 0.08,     // Dim sky ambient
+    hemiIntensity: 0.08,
     exposure:     0.88,
     ambientColor: 0x050c1c,
-    ambientIntensity: 0.04,  // Minimal ambient so landscape is dark
+    ambientIntensity: 0.04,
     isNight:      1.0,
   },
 };
@@ -91,23 +92,27 @@ export class Atmosphere {
 
     this._initLighting();
     this._initSkySphere();
+
+    // Procedural Cumulus Clouds
+    this.cloudSystem = new CloudSystem(this.scene, 28);
+
     this.setEnvironment('daylight');
   }
 
   _initLighting() {
-    // Main sun / moon directional light
+    // Main sun / moon directional light with tightly bounded shadow camera
     this.sunLight = new THREE.DirectionalLight(0xffffff, 1.55);
     this.sunLight.castShadow = true;
-    this.sunLight.shadow.camera.left   = -95;
-    this.sunLight.shadow.camera.right  =  95;
-    this.sunLight.shadow.camera.top    =  95;
-    this.sunLight.shadow.camera.bottom = -95;
-    this.sunLight.shadow.camera.near   = 0.5;
-    this.sunLight.shadow.camera.far    = 400;
+    this.sunLight.shadow.camera.left   = -52;
+    this.sunLight.shadow.camera.right  =  52;
+    this.sunLight.shadow.camera.top    =  52;
+    this.sunLight.shadow.camera.bottom = -52;
+    this.sunLight.shadow.camera.near   = 1.0;
+    this.sunLight.shadow.camera.far    = 140;
     this.sunLight.shadow.mapSize.width  = 1024;
     this.sunLight.shadow.mapSize.height = 1024;
-    this.sunLight.shadow.bias = -0.0003;
-    this.sunLight.shadow.normalBias = 0.02;
+    this.sunLight.shadow.bias = -0.0004;
+    this.sunLight.shadow.normalBias = 0.025;
     this.scene.add(this.sunLight);
     this.scene.add(this.sunLight.target);
 
@@ -122,12 +127,19 @@ export class Atmosphere {
 
   _initSkySphere() {
     this._skyUniforms = {
-      topColor:    { value: new THREE.Color(0x4a90d0) },
-      midColor:    { value: new THREE.Color(0x7ec8e3) },
-      bottomColor: { value: new THREE.Color(0xc8e8f5) },
-      sunDir:      { value: new THREE.Vector3(-0.3, 0.85, -0.3).normalize() },
-      sunColor:    { value: new THREE.Color(1.0, 0.97, 0.88) },
-      isNight:     { value: 0.0 },
+      topColor:      { value: new THREE.Color(0x4a90d0) },
+      midColor:      { value: new THREE.Color(0x7ec8e3) },
+      bottomColor:   { value: new THREE.Color(0xc8e8f5) },
+      sunDir:        { value: new THREE.Vector3(-0.3, 0.85, -0.3).normalize() },
+      sunColor:      { value: new THREE.Color(1.0, 0.97, 0.88) },
+      isNight:       { value: 0.0 },
+      sunDiscExp:    { value: 380.0 },
+      sunDiscMult:   { value: 5.0 },
+      sunHaloExp:    { value: 12.0 },
+      sunHaloMult:   { value: 0.20 },
+      hazeBandMult:  { value: 0.12 },
+      starThreshold: { value: 0.965 },
+      starsEnabled:  { value: 1.0 },
     };
 
     const skyMat = new THREE.ShaderMaterial({
@@ -147,6 +159,13 @@ export class Atmosphere {
         uniform vec3 sunDir;
         uniform vec3 sunColor;
         uniform float isNight;
+        uniform float sunDiscExp;
+        uniform float sunDiscMult;
+        uniform float sunHaloExp;
+        uniform float sunHaloMult;
+        uniform float hazeBandMult;
+        uniform float starThreshold;
+        uniform float starsEnabled;
         varying vec3 vWorldPosition;
 
         float hash21(vec2 p) {
@@ -171,23 +190,26 @@ export class Atmosphere {
 
           // Sun / Moon disc and halo
           float sunDot = max(dot(dir, sunDir), 0.0);
-          float sunDisc = pow(sunDot, 380.0) * (isNight > 0.5 ? 2.5 : 5.0);
-          float sunHalo = pow(sunDot, 12.0)  * (isNight > 0.5 ? 0.08 : 0.20);
+          float discBrightness = isNight > 0.5 ? sunDiscMult * 0.5 : sunDiscMult;
+          float haloBrightness = isNight > 0.5 ? sunHaloMult * 0.4 : sunHaloMult;
+          float sunDisc = pow(sunDot, sunDiscExp) * discBrightness;
+          float sunHalo = pow(sunDot, sunHaloExp)  * haloBrightness;
           sky += sunColor * (sunDisc + sunHalo);
 
           // Horizontal haze band at horizon
-          float hazeBand = exp(-abs(h) * 8.0) * (isNight > 0.5 ? 0.05 : 0.12);
+          float haze = isNight > 0.5 ? hazeBandMult * 0.4 : hazeBandMult;
+          float hazeBand = exp(-abs(h) * 8.0) * haze;
           sky += bottomColor * hazeBand;
 
           // Twinkling stars in night sky
-          if (isNight > 0.5 && dir.y > 0.06) {
+          if (starsEnabled > 0.5 && isNight > 0.5 && dir.y > 0.06) {
             vec2 starUV = vec2(atan(dir.z, dir.x) * 45.0, dir.y * 80.0);
             vec2 cell   = floor(starUV);
             float rnd   = hash21(cell);
-            if (rnd > 0.965) {
+            if (rnd > starThreshold) {
               vec2 fractUV = fract(starUV) - 0.5;
               float dist = length(fractUV);
-              float starGlow = smoothstep(0.18, 0.0, dist) * ((rnd - 0.965) / 0.035);
+              float starGlow = smoothstep(0.18, 0.0, dist) * ((rnd - starThreshold) / (1.0 - starThreshold));
               sky += vec3(0.85, 0.92, 1.0) * starGlow * smoothstep(0.06, 0.30, dir.y);
             }
           }
@@ -236,6 +258,11 @@ export class Atmosphere {
     // Exposure
     this.renderer.toneMappingExposure = p.exposure;
 
+    // Clouds
+    if (this.cloudSystem) {
+      this.cloudSystem.setEnvironment(name);
+    }
+
     // Apply distance fog matching current graphics quality
     this._updateFog();
   }
@@ -266,7 +293,7 @@ export class Atmosphere {
     this.scene.fog = new THREE.FogExp2(p.fogColor, p.fogDensity * densityMult);
   }
 
-  update(carPosition) {
+  update(carPosition, dt = 0.016) {
     if (!carPosition || !this.sunLight) return;
 
     // Sun tracks the car
@@ -281,6 +308,11 @@ export class Atmosphere {
     // Sky sphere follows the car
     if (this.skyMesh) {
       this.skyMesh.position.copy(carPosition);
+    }
+
+    // Update cloud drift and wind
+    if (this.cloudSystem) {
+      this.cloudSystem.update(dt, carPosition);
     }
   }
 }

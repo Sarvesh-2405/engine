@@ -1,4 +1,9 @@
 import * as THREE from 'three';
+import { EffectComposer }   from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass }       from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass }  from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass }       from 'three/addons/postprocessing/OutputPass.js';
+
 import { FormulaCarMesh }    from './car/FormulaCarMesh.js';
 import { VehicleController } from './car/VehicleController.js';
 import { CameraManager }     from './camera/CameraManager.js';
@@ -8,6 +13,7 @@ import { TerrainManager }    from './world/TerrainManager.js';
 import { VegetationManager } from './world/VegetationManager.js';
 import { Atmosphere }        from './graphics/Atmosphere.js';
 import { HUD }               from './ui/HUD.js';
+import { DebugPanel }        from './ui/DebugPanel.js';
 
 class GameApp {
   constructor() {
@@ -17,12 +23,12 @@ class GameApp {
     this.renderer = new THREE.WebGLRenderer({
       antialias: true,
       powerPreference: 'high-performance',
-      logarithmicDepthBuffer: true,   // prevents Z-fighting on road surfaces
+      precision: 'mediump',
     });
     this.renderer.setSize(window.innerWidth, window.innerHeight);
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.25));
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.15));
 
-    // Enable soft shadow mapping by default
+    // Enable soft shadow mapping with optimized footprint
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
@@ -38,7 +44,7 @@ class GameApp {
 
     // ── Scene ─────────────────────────────────────────────
     this.scene  = new THREE.Scene();
-    this.camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.05, 3000);
+    this.camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.35, 2200);
 
     // ── Atmosphere ────────────────────────────────────────
     this.atmosphere = new Atmosphere(this.scene, this.renderer);
@@ -50,14 +56,18 @@ class GameApp {
 
     // ── Road ──────────────────────────────────────────────
     this.barrierMode = 'dynamic'; // 'dynamic' | 'none' | 'all'
-    this.roadSpline = new RoadSpline(123);
-    this.roadGroup  = RoadMeshBuilder.buildMeshes(this.roadSpline, 9.8, this.barrierMode);
+    this.roadWidth   = 9.8;
+    this.roadSpline  = new RoadSpline(123);
+    this.roadGroup   = RoadMeshBuilder.buildMeshes(this.roadSpline, this.roadWidth, this.barrierMode);
     this.scene.add(this.roadGroup);
     this.vehicleController._roadSplineRef = this.roadSpline;
 
     // ── World ─────────────────────────────────────────────
     this.vegetationManager = new VegetationManager(this.scene, this.roadSpline);
     this.terrainManager    = new TerrainManager(this.scene, this.roadSpline, this.vegetationManager);
+    this.vegetationManager.onTreesLoaded = () => {
+      this.terrainManager.repopulateChunks();
+    };
 
     // ── Camera ────────────────────────────────────────────
     this.cameraManager = new CameraManager(this.camera);
@@ -65,9 +75,29 @@ class GameApp {
       if (this.hud) this.hud.setCameraModeLabel(name);
     });
 
+    // ── Post-Processing Pipeline (UnrealBloomPass) ─────────
+    this.composer = new EffectComposer(this.renderer);
+    this.renderPass = new RenderPass(this.scene, this.camera);
+    this.composer.addPass(this.renderPass);
+
+    // Render bloom at half-resolution for 75% GPU fillrate savings
+    this.bloomPass = new UnrealBloomPass(
+      new THREE.Vector2(Math.round(window.innerWidth * 0.5), Math.round(window.innerHeight * 0.5)),
+      0.40,  // strength
+      0.55,  // radius
+      0.82   // threshold
+    );
+    this.composer.addPass(this.bloomPass);
+
+    this.outputPass = new OutputPass();
+    this.composer.addPass(this.outputPass);
+
     // ── Headlights ────────────────────────────────────────
     this._headlightsOn = false;
     this._buildHeadlights();
+
+    // ── Debug Panel (Tweakpane) ───────────────────────────
+    this.debugPanel = new DebugPanel(this);
 
     // ── HUD ───────────────────────────────────────────────
     this.hud = new HUD({
@@ -78,6 +108,7 @@ class GameApp {
       onAutodriveChange:   (on)   => this.vehicleController.setAutodrive(on),
       onHeadlightChange:   (on)   => this._setHeadlights(on),
       onBarrierChange:     (mode) => this._setBarrierMode(mode),
+      onToggleDebugPanel:  ()     => this.debugPanel.toggle(),
     });
 
     // ── Environment cycling state ─────────────────────────
@@ -218,12 +249,13 @@ class GameApp {
   }
 
   // ── Road rebuild ─────────────────────────────────────────
-  _rebuildRoadMesh() {
+  _rebuildRoadMesh(width) {
+    if (width !== undefined) this.roadWidth = width;
     this.scene.remove(this.roadGroup);
     this.roadGroup.traverse(child => {
       if (child.geometry) child.geometry.dispose();
     });
-    this.roadGroup = RoadMeshBuilder.buildMeshes(this.roadSpline, 9.8, this.barrierMode);
+    this.roadGroup = RoadMeshBuilder.buildMeshes(this.roadSpline, this.roadWidth, this.barrierMode);
     this.scene.add(this.roadGroup);
   }
 
@@ -236,12 +268,12 @@ class GameApp {
       case 'ultra':
         this.terrainManager.chunkRadius = 3;
         this.renderer.shadowMap.enabled = true;
-        this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.35));
+        this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.30));
         break;
       case 'high':
         this.terrainManager.chunkRadius = 3;
         this.renderer.shadowMap.enabled = true;
-        this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.25));
+        this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.15));
         break;
       case 'medium':
         this.terrainManager.chunkRadius = 3;
@@ -253,6 +285,9 @@ class GameApp {
         this.renderer.shadowMap.enabled = false;
         this.renderer.setPixelRatio(1.0);
         break;
+    }
+    if (this.composer) {
+      this.composer.setPixelRatio(this.renderer.getPixelRatio());
     }
     this.terrainManager.repopulateChunks();
     this.terrainManager.update(this.vehicleController.position, 0.016);
@@ -293,6 +328,9 @@ class GameApp {
     this.camera.aspect = window.innerWidth / window.innerHeight;
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(window.innerWidth, window.innerHeight);
+    if (this.composer) {
+      this.composer.setSize(window.innerWidth, window.innerHeight);
+    }
   }
 
   // ── Main loop ──────────────────────────────────────────────
@@ -327,7 +365,7 @@ class GameApp {
 
     // Stream terrain chunks & water wave updates
     this.terrainManager.update(this.vehicleController.position, dt);
-    this.vegetationManager.update(dt);
+    this.vegetationManager.update(dt, this.vehicleController.position, this.atmosphere);
 
     // Sky / sun / cloud tracking
     this.atmosphere.update(this.vehicleController.position, dt);
@@ -351,7 +389,11 @@ class GameApp {
       this.vehicleController.position,
     );
 
-    this.renderer.render(this.scene, this.camera);
+    if (this.composer) {
+      this.composer.render();
+    } else {
+      this.renderer.render(this.scene, this.camera);
+    }
   }
 }
 
