@@ -27,12 +27,12 @@ export const GLOBAL_WIND = {
  * Tapers exponentially to a delicate concave tip.
  */
 function bladeHalfWidth(t) {
-  return 0.5 * Math.pow(Math.max(0, 1 - t), 1.2);
+  return 0.18 * Math.pow(Math.max(0, 1 - t), 1.35);
 }
 
 /**
  * Creates unit-size tapered blade strip geometry (base width = 1, height = 1).
- * The instance scale matrix scales this to world dimensions (e.g. width ~ 0.12m, height ~ 0.65m).
+ * The instance scale matrix scales this to world dimensions.
  * @param {number} segments Bend quality segments (default 3 = 7 vertices, 5 triangles).
  */
 export function makeBladeGeometry(segments = 3) {
@@ -72,10 +72,10 @@ export function makeBladeGeometry(segments = 3) {
 }
 
 /**
- * Creates dense multi-blade tuft clump geometry (4 organically fanned blades).
- * Multiplies grass density by 4x per instance for a thick stylized meadow at low vertex cost.
+ * Creates dense multi-blade tuft clump geometry (organically fanned blades).
+ * Wide radial fan produces thick stylized meadow coverage at low vertex cost.
  */
-export function makeClumpBladeGeometry(numBlades = 4, segments = 2) {
+export function makeClumpBladeGeometry(numBlades = 6, segments = 3) {
   const seg = Math.max(1, Math.round(segments));
   const vertsPerBlade = seg * 2 + 1;
   const positions = [];
@@ -85,17 +85,17 @@ export function makeClumpBladeGeometry(numBlades = 4, segments = 2) {
     const angle = (b / numBlades) * Math.PI + (b * 0.38);
     const cosA = Math.cos(angle);
     const sinA = Math.sin(angle);
-    const radOffset = 0.12 * (b % 2 === 0 ? 0.7 : 1.0);
+    const radOffset = 0.09 * (b % 2 === 0 ? 0.7 : 1.0);
     const ox = Math.cos(angle + Math.PI * 0.5) * radOffset;
     const oz = Math.sin(angle + Math.PI * 0.5) * radOffset;
-    const tilt = 0.08 + (b % 2) * 0.05;
+    const tilt = 0.09 + (b % 2) * 0.05;
     const hScale = 0.88 + ((b * 5) % 4) * 0.08;
 
     const baseVertex = (b * vertsPerBlade);
 
     for (let i = 0; i < seg; i++) {
       const t = i / seg;
-      const w = bladeHalfWidth(t) * 0.9;
+      const w = bladeHalfWidth(t) * 0.92;
       const curY = t * hScale;
       const leanX = sinA * t * tilt;
       const leanZ = -cosA * t * tilt;
@@ -125,6 +125,78 @@ export function makeClumpBladeGeometry(numBlades = 4, segments = 2) {
     }
     const lastL = baseVertex + (seg - 1) * 2;
     indices.push(lastL, baseVertex + seg * 2, lastL + 1);
+  }
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geo.setIndex(indices);
+  geo.computeVertexNormals();
+  return geo;
+}
+
+/**
+ * Creates compact spherical grass bush / tussock geometry.
+ * Multi-ring radial layout creates neat, delicate, rounded wild grass shrubs.
+ */
+export function makeGrassBushGeometry(numBlades = 14, segments = 3) {
+  const seg = Math.max(1, Math.round(segments));
+  const vertsPerBlade = seg * 2 + 1;
+  const positions = [];
+  const indices = [];
+
+  // 3 rings: inner (upright), middle (moderate lean), outer (gentle flared skirt)
+  const rings = [
+    { count: 4,  rad: 0.05, tilt: 0.06, hScale: 0.95, wMul: 1.10 },
+    { count: 5,  rad: 0.12, tilt: 0.20, hScale: 0.82, wMul: 1.00 },
+    { count: 7,  rad: 0.20, tilt: 0.34, hScale: 0.68, wMul: 0.90 },
+  ];
+
+  let bIndex = 0;
+  for (let r = 0; r < rings.length; r++) {
+    const ring = rings[r];
+    for (let i = 0; i < ring.count; i++) {
+      const angle = (i / ring.count) * Math.PI * 2.0 + (r * 0.45);
+      const cosA = Math.cos(angle);
+      const sinA = Math.sin(angle);
+      const ox = cosA * ring.rad;
+      const oz = sinA * ring.rad;
+      const tilt = ring.tilt + ((i * 3) % 4) * 0.03;
+      const hScale = ring.hScale * (0.92 + ((i * 7) % 5) * 0.04);
+      const baseVertex = bIndex * vertsPerBlade;
+
+      for (let s = 0; s < seg; s++) {
+        const t = s / seg;
+        const w = bladeHalfWidth(t) * ring.wMul;
+        const curY = t * hScale;
+        const leanX = cosA * Math.pow(t, 1.2) * tilt;
+        const leanZ = sinA * Math.pow(t, 1.2) * tilt;
+
+        // Tangent perpendicular to radial ray
+        const tx = -sinA;
+        const tz = cosA;
+
+        // Left vertex
+        positions.push(ox + leanX - tx * w, curY, oz + leanZ - tz * w);
+        // Right vertex
+        positions.push(ox + leanX + tx * w, curY, oz + leanZ + tz * w);
+      }
+      // Tip vertex
+      const tipX = ox + cosA * Math.pow(1.0, 1.2) * tilt * 1.35;
+      const tipZ = oz + sinA * Math.pow(1.0, 1.2) * tilt * 1.35;
+      positions.push(tipX, 1.0 * hScale, tipZ);
+
+      for (let s = 0; s < seg - 1; s++) {
+        const l  = baseVertex + s * 2;
+        const rV = l + 1;
+        const nl = l + 2;
+        const nr = l + 3;
+        indices.push(l, nl, rV, rV, nl, nr);
+      }
+      const lastL = baseVertex + (seg - 1) * 2;
+      indices.push(lastL, baseVertex + seg * 2, lastL + 1);
+
+      bIndex++;
+    }
   }
 
   const geo = new THREE.BufferGeometry();
@@ -483,6 +555,7 @@ export class GrassBuilder {
     // Multi-blade clump geometry for authentic dense grass coverage
     this.bladeGeo = makeClumpBladeGeometry(6, 3);
     this.singleBladeGeo = makeBladeGeometry(3);
+    this.bushGeo = makeGrassBushGeometry(18, 3);
     this.flowerQuadGeo = createCrossBillboardFlowerGeometry();
 
     const texLoader = new THREE.TextureLoader();

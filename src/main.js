@@ -354,7 +354,7 @@ class GameApp {
     // Physics
     this.vehicleController.update(
       dt,
-      (x, z) => this.terrainManager.getElevationAt(x, z),
+      (x, z) => this.terrainManager.getDrivingElevationAt(x, z),
       (x, z) => this.roadSpline.getRoadInfo(x, z)
     );
 

@@ -220,16 +220,8 @@ import {
 } from './GrassShaders.js';
 
 export function makePineLeafMaterial(srcMat, mesh, u) {
-  let uLeafYMin = 0.0;
-  let uLeafYMax = 5.0;
-
-  if (mesh && mesh.geometry) {
-    if (!mesh.geometry.boundingBox) mesh.geometry.computeBoundingBox();
-    if (mesh.geometry.boundingBox) {
-      uLeafYMin = mesh.geometry.boundingBox.min.y;
-      uLeafYMax = mesh.geometry.boundingBox.max.y;
-    }
-  }
+  const uLeafYMin = 0.5;
+  const uLeafYMax = 7.5;
 
   const mat = new THREE.MeshLambertMaterial({
     map: srcMat ? srcMat.map : null,
@@ -314,16 +306,53 @@ export function makePineLeafDepthMaterial(srcMat) {
   });
 }
 
-export function makeBarkMaterial(uBark) {
+export function makeBarkMaterial(uBark, uSurface) {
   const mat = new THREE.MeshLambertMaterial({ side: THREE.FrontSide });
 
   mat.onBeforeCompile = (shader) => {
     if (uBark) Object.assign(shader.uniforms, uBark);
+    if (uSurface) {
+      shader.uniforms.uTime = uSurface.uTime;
+      shader.uniforms.uWindSpeed = uSurface.uWindSpeed;
+      shader.uniforms.uWindFreq = uSurface.uWindFreq;
+      shader.uniforms.uWindDir = uSurface.uWindDir;
+      shader.uniforms.uLeafWindStrength = uSurface.uLeafWindStrength;
+    } else if (_activeSurfaceUniforms) {
+      shader.uniforms.uTime = _activeSurfaceUniforms.uTime;
+      shader.uniforms.uWindSpeed = _activeSurfaceUniforms.uWindSpeed;
+      shader.uniforms.uWindFreq = _activeSurfaceUniforms.uWindFreq;
+      shader.uniforms.uWindDir = _activeSurfaceUniforms.uWindDir;
+      shader.uniforms.uLeafWindStrength = _activeSurfaceUniforms.uLeafWindStrength;
+    }
 
-    shader.vertexShader = `varying vec2 vBarkUv;\n` + shader.vertexShader;
+    shader.vertexShader =
+      `uniform float uTime;
+      uniform float uWindSpeed;
+      uniform float uWindFreq;
+      uniform vec2  uWindDir;
+      uniform float uLeafWindStrength;
+      varying vec2 vBarkUv;\n` + shader.vertexShader;
+
     shader.vertexShader = shader.vertexShader.replace(
       '#include <begin_vertex>',
-      `#include <begin_vertex>\n      vBarkUv = uv;`
+      `#include <begin_vertex>
+      vBarkUv = uv;
+      #ifdef USE_INSTANCING
+        vec3 _trkWld = (modelMatrix * instanceMatrix * vec4(position, 1.0)).xyz;
+        mat3 _trkRot = mat3(
+          normalize(vec3(instanceMatrix[0])),
+          normalize(vec3(instanceMatrix[1])),
+          normalize(vec3(instanceMatrix[2]))
+        );
+      #else
+        vec3 _trkWld = (modelMatrix * vec4(position, 1.0)).xyz;
+        mat3 _trkRot = mat3(1.0);
+      #endif
+      float _trkT = clamp(position.y / 7.5, 0.0, 1.0);
+      float _trkMask = _trkT * _trkT;
+      vec3 _trkWLocal = transpose(_trkRot) * vec3(uWindDir.x, 0.0, uWindDir.y);
+      float _trkSway = sin(dot(_trkWld.xz, uWindDir) * uWindFreq + uTime * uWindSpeed);
+      transformed += _trkWLocal * (_trkSway * uLeafWindStrength * 0.45 * _trkMask);`
     );
 
     shader.fragmentShader = BARK_UNIFORMS + shader.fragmentShader;
@@ -380,7 +409,7 @@ export class TreeBuilder {
       const surfaceU = this.uniforms ? this.uniforms.surface : _activeSurfaceUniforms;
       const barkU = this.uniforms ? this.uniforms.bark : null;
 
-      this.glbTrunkMaterial = makeBarkMaterial(barkU);
+      this.glbTrunkMaterial = makeBarkMaterial(barkU, surfaceU);
 
       // Find all tree variants by grouping under Cylinder.xxx
       const treeGroups = new Map();

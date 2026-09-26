@@ -194,15 +194,46 @@ export class TerrainManager {
     if (this.roadSpline) {
       const info = this.roadSpline.getRoadInfo(x, z);
       if (isFinite(info.distance)) {
-        const roadRadius  = 5.2;
-        const blendRadius = 20.0;
+        const roadRadius  = 5.8;  // Road (4.9m) + inner shoulder
+        const blendRadius = 18.0; // Smooth blend to natural terrain
 
         if (info.distance <= roadRadius) {
-          return info.height - 0.06;
+          // Safely depressed beneath the road and shoulder mesh to eliminate any z-fighting / polygon clipping
+          return info.height - 0.12;
         } else if (info.distance < blendRadius) {
           const t = (info.distance - roadRadius) / (blendRadius - roadRadius);
           const smoothT = t * t * (3 - 2 * t);
-          return THREE.MathUtils.lerp(info.height - 0.06, raw, smoothT);
+          return THREE.MathUtils.lerp(info.height - 0.12, raw, smoothT);
+        }
+      }
+    }
+    return raw;
+  }
+
+  getDrivingElevationAt(x, z) {
+    // True continuous driving surface elevation (asphalt, shoulder, and grass)
+    const raw = fbm(x * 0.016, z * 0.016, 6) * 18.0 - 1.5;
+    if (this.roadSpline) {
+      const info = this.roadSpline.getRoadInfo(x, z);
+      if (isFinite(info.distance)) {
+        const roadHalfW   = 4.9;
+        const shoulderW   = 1.2;
+        const blendRadius = 18.0;
+        const ROAD_SURFACE_Y = 0.20;
+
+        if (info.distance <= roadHalfW) {
+          // Directly on the asphalt surface (includes curve banking)
+          return info.height + ROAD_SURFACE_Y;
+        } else if (info.distance <= roadHalfW + shoulderW) {
+          // On the gravel shoulder: gentle, smooth slope
+          const st = (info.distance - roadHalfW) / shoulderW;
+          return info.height + ROAD_SURFACE_Y - st * 0.10;
+        } else if (info.distance < blendRadius) {
+          // Smooth Hermite blend into natural rolling terrain
+          const shoulderEdgeY = info.height + ROAD_SURFACE_Y - 0.10;
+          const t = (info.distance - (roadHalfW + shoulderW)) / (blendRadius - (roadHalfW + shoulderW));
+          const smoothT = t * t * (3 - 2 * t);
+          return THREE.MathUtils.lerp(shoulderEdgeY, raw, smoothT);
         }
       }
     }
@@ -246,7 +277,7 @@ export class TerrainManager {
       }
     }
 
-    const grassMaxDistSq = (this.chunkSize * 1.55) * (this.chunkSize * 1.55);
+    const grassMaxDistSq = (this.chunkSize * 1.85) * (this.chunkSize * 1.85);
 
     // Smoothly ease in new chunks so terrain & trees glide in without popping
     for (const [key, mesh] of this.activeChunks.entries()) {

@@ -7,29 +7,29 @@ function createAsphaltTexture() {
   canvas.height = 1024;
   const ctx = canvas.getContext('2d');
 
-  // Rich dark slate charcoal asphalt
-  ctx.fillStyle = '#222328';
+  // Clean luminous medium-slate asphalt
+  ctx.fillStyle = '#484c55';
   ctx.fillRect(0, 0, 1024, 1024);
 
   // Micro-aggregate mineral speckle (fine limestone & basalt granules)
   const imgData = ctx.getImageData(0, 0, 1024, 1024);
   const data = imgData.data;
   for (let i = 0; i < data.length; i += 4) {
-    const noise = (Math.random() - 0.5) * 42;
+    const noise = (Math.random() - 0.5) * 36;
     data[i]     = Math.min(255, Math.max(0, data[i] + noise));
     data[i + 1] = Math.min(255, Math.max(0, data[i + 1] + noise));
-    data[i + 2] = Math.min(255, Math.max(0, data[i + 2] + noise + 3));
+    data[i + 2] = Math.min(255, Math.max(0, data[i + 2] + noise + 2));
   }
   ctx.putImageData(imgData, 0, 0);
 
-  // Realistic tire rubber wear lanes (darker grooved tire contact tracks)
+  // Realistic tire rubber wear lanes (subtle grooved tire contact tracks)
   const makeRubberTrack = (x1, x2) => {
     const g = ctx.createLinearGradient(x1, 0, x2, 0);
-    g.addColorStop(0,   'rgba(12, 13, 16, 0)');
-    g.addColorStop(0.2, 'rgba(12, 13, 16, 0.35)');
-    g.addColorStop(0.5, 'rgba(12, 13, 16, 0.55)');
-    g.addColorStop(0.8, 'rgba(12, 13, 16, 0.35)');
-    g.addColorStop(1,   'rgba(12, 13, 16, 0)');
+    g.addColorStop(0,   'rgba(28, 30, 36, 0)');
+    g.addColorStop(0.2, 'rgba(28, 30, 36, 0.22)');
+    g.addColorStop(0.5, 'rgba(28, 30, 36, 0.38)');
+    g.addColorStop(0.8, 'rgba(28, 30, 36, 0.22)');
+    g.addColorStop(1,   'rgba(28, 30, 36, 0)');
     ctx.fillStyle = g;
     ctx.fillRect(x1, 0, x2 - x1, 1024);
   };
@@ -62,9 +62,9 @@ function createKerbTexture() {
 
   // Subtle bevel shade
   const g = ctx.createLinearGradient(0, 0, 128, 0);
-  g.addColorStop(0,   'rgba(0,0,0,0.20)');
-  g.addColorStop(0.5, 'rgba(255,255,255,0.10)');
-  g.addColorStop(1,   'rgba(0,0,0,0.30)');
+  g.addColorStop(0,   'rgba(0,0,0,0.15)');
+  g.addColorStop(0.5, 'rgba(255,255,255,0.12)');
+  g.addColorStop(1,   'rgba(0,0,0,0.22)');
   ctx.fillStyle = g;
   ctx.fillRect(0, 0, 128, 128);
 
@@ -82,14 +82,14 @@ function createShoulderTexture() {
   canvas.height = 256;
   const ctx = canvas.getContext('2d');
 
-  // Earthy grey-brown gravel
-  ctx.fillStyle = '#4a463f';
+  // Earthy natural warm stone gravel
+  ctx.fillStyle = '#7a756b';
   ctx.fillRect(0, 0, 256, 256);
 
   const imgData = ctx.getImageData(0, 0, 256, 256);
   const d = imgData.data;
   for (let i = 0; i < d.length; i += 4) {
-    const n = (Math.random() - 0.5) * 60;
+    const n = (Math.random() - 0.5) * 50;
     d[i]   = Math.min(255, Math.max(0, d[i] + n + 4));
     d[i+1] = Math.min(255, Math.max(0, d[i+1] + n));
     d[i+2] = Math.min(255, Math.max(0, d[i+2] + n - 4));
@@ -168,8 +168,8 @@ export class RoadMeshBuilder {
     const roadMat = new THREE.MeshStandardMaterial({
       map: _asphaltTex,
       color: 0xffffff,
-      roughness: 0.72,
-      metalness: 0.08,
+      roughness: 0.60,
+      metalness: 0.04,
       side: THREE.DoubleSide,
     });
     const roadMesh = new THREE.Mesh(roadGeo, roadMat);
@@ -180,8 +180,8 @@ export class RoadMeshBuilder {
     // ── 2. Roadside Shoulders & Downward Skirts ─────────────
     const sPos = [], sUV = [], sIdx = [];
     let sVertCount = 0;
-    const shoulderW = 1.1;
-    const skirtDepth = 1.2;
+    const shoulderW = 1.2;
+    const skirtDepth = 1.6;
 
     for (let i = 0; i < pts.length - 1; i++) {
       const p1 = pts[i], p2 = pts[i + 1];
@@ -196,8 +196,8 @@ export class RoadMeshBuilder {
         const in1 = new THREE.Vector3(p1.x - norm1.x * halfW, p1.y - halfW * Math.sin(b1) + ROAD_Y_OFFSET, p1.z - norm1.z * halfW);
         const in2 = new THREE.Vector3(p2.x - norm2.x * halfW, p2.y - halfW * Math.sin(b2) + ROAD_Y_OFFSET, p2.z - norm2.z * halfW);
 
-        const out1 = new THREE.Vector3(p1.x - norm1.x * (halfW + shoulderW), in1.y - 0.12, p1.z - norm1.z * (halfW + shoulderW));
-        const out2 = new THREE.Vector3(p2.x - norm2.x * (halfW + shoulderW), in2.y - 0.12, p2.z - norm2.z * (halfW + shoulderW));
+        const out1 = new THREE.Vector3(p1.x - norm1.x * (halfW + shoulderW), in1.y - 0.10, p1.z - norm1.z * (halfW + shoulderW));
+        const out2 = new THREE.Vector3(p2.x - norm2.x * (halfW + shoulderW), in2.y - 0.10, p2.z - norm2.z * (halfW + shoulderW));
 
         const skirt1 = new THREE.Vector3(out1.x, out1.y - skirtDepth, out1.z);
         const skirt2 = new THREE.Vector3(out2.x, out2.y - skirtDepth, out2.z);
@@ -225,8 +225,8 @@ export class RoadMeshBuilder {
         const in1 = new THREE.Vector3(p1.x + norm1.x * halfW, p1.y + halfW * Math.sin(b1) + ROAD_Y_OFFSET, p1.z + norm1.z * halfW);
         const in2 = new THREE.Vector3(p2.x + norm2.x * halfW, p2.y + halfW * Math.sin(b2) + ROAD_Y_OFFSET, p2.z + norm2.z * halfW);
 
-        const out1 = new THREE.Vector3(p1.x + norm1.x * (halfW + shoulderW), in1.y - 0.12, p1.z + norm1.z * (halfW + shoulderW));
-        const out2 = new THREE.Vector3(p2.x + norm2.x * (halfW + shoulderW), in2.y - 0.12, p2.z + norm2.z * (halfW + shoulderW));
+        const out1 = new THREE.Vector3(p1.x + norm1.x * (halfW + shoulderW), in1.y - 0.10, p1.z + norm1.z * (halfW + shoulderW));
+        const out2 = new THREE.Vector3(p2.x + norm2.x * (halfW + shoulderW), in2.y - 0.10, p2.z + norm2.z * (halfW + shoulderW));
 
         const skirt1 = new THREE.Vector3(out1.x, out1.y - skirtDepth, out1.z);
         const skirt2 = new THREE.Vector3(out2.x, out2.y - skirtDepth, out2.z);

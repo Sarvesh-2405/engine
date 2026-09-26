@@ -251,11 +251,11 @@ export class VehicleController {
       slopePitch = THREE.MathUtils.clamp(slopePitch, -0.45, 0.45);
       slopeRoll  = THREE.MathUtils.clamp(slopeRoll,  -0.40, 0.40);
 
-      // Exact tire contact height (average ground height beneath all 4 tire patches)
+      // Exact tire contact height (average surface elevation beneath all 4 tire patches)
       const wheelBaseGround = (safeFL + safeFR + safeRL + safeRR) * 0.25;
 
-      // When the car is on the road, match the elevated road surface with zero air gap
-      targetY = wheelBaseGround + (this.isOnRoad ? 0.22 : 0.02);
+      // Clean contact with continuous surface elevation (road, shoulder, and grass)
+      targetY = wheelBaseGround + 0.02;
     }
 
     // ── Firm ground tracking & smooth suspension damping ──
