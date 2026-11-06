@@ -174,6 +174,7 @@ export class HUD {
             <tr><td><span class="kbd">Space</span></td><td>Handbrake / Drift</td></tr>
             <tr><td><span class="kbd">B</span></td><td>Toggle Road Barriers (Dynamic / None / All)</td></tr>
             <tr><td><span class="kbd">C</span></td><td>Cycle Camera Mode</td></tr>
+            <tr><td><span class="kbd">V</span></td><td>Switch Vehicle (Formula ↔ GT Sport)</td></tr>
             <tr><td><span class="kbd">Q</span> / <span class="kbd">E</span></td><td>Prev / Next Time of Day</td></tr>
             <tr><td><span class="kbd">H</span></td><td>Toggle Headlights</td></tr>
             <tr><td><span class="kbd">R</span></td><td>Respawn Car</td></tr>
@@ -379,6 +380,28 @@ export class HUD {
   }
 
   setEnvironmentLabel(name) { this._setEnvTile(name); }
+
+  /** Show a brief vehicle-name toast in the HUD */
+  setVehicleLabel(name) {
+    let el = document.getElementById('vehicleToast');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'vehicleToast';
+      el.style.cssText = [
+        'position:fixed', 'bottom:110px', 'left:50%', 'transform:translateX(-50%)',
+        'background:rgba(0,0,0,0.72)', 'color:#fff',
+        'padding:8px 22px', 'border-radius:24px',
+        'font-family:inherit', 'font-size:0.95rem', 'font-weight:600',
+        'letter-spacing:0.06em', 'pointer-events:none',
+        'transition:opacity 0.4s', 'opacity:0', 'z-index:9999',
+      ].join(';');
+      document.body.appendChild(el);
+    }
+    el.textContent = `🚗  ${name}`;
+    el.style.opacity = '1';
+    clearTimeout(this._vehicleToastTimer);
+    this._vehicleToastTimer = setTimeout(() => { el.style.opacity = '0'; }, 2200);
+  }
 
   _setEnvTile(name) {
     this._envIdx = this._envList.indexOf(name);

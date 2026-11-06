@@ -289,8 +289,10 @@ export class VehicleController {
     if (!isFinite(this.chassisRoll))  this.chassisRoll  = 0;
     if (!isFinite(this.headingAngle)) this.headingAngle = 0;
 
-    this.carMesh.root.position.copy(this.position);
-    this.carMesh.root.rotation.set(this.chassisPitch, this.headingAngle, this.chassisRoll, 'YXZ');
+    if (this.carMesh) {
+      this.carMesh.root.position.copy(this.position);
+      this.carMesh.root.rotation.set(this.chassisPitch, this.headingAngle, this.chassisRoll, 'YXZ');
+    }
 
     // ── Speedometer & Realistic F1 Gears ──────────────────
     const rawSpeed = this.velocity.length() * 3.6;
@@ -311,6 +313,8 @@ export class VehicleController {
     this.rpm = Math.min(13500, Math.max(1000, this.rpm));
 
     const isTireSlipping = this.isDrifting || (this.isBraking && this.speedKmh > 35);
-    this.carMesh.updateVisuals(this.currentSteerAngle, speedRatio, this.isBraking, safeDt, forwardSpeed, isTireSlipping, this.isOnRoad);
+    if (this.carMesh) {
+      this.carMesh.updateVisuals(this.currentSteerAngle, speedRatio, this.isBraking, safeDt, forwardSpeed, isTireSlipping, this.isOnRoad);
+    }
   }
 }

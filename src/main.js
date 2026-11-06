@@ -4,8 +4,8 @@ import { RenderPass }       from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass }  from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass }       from 'three/addons/postprocessing/OutputPass.js';
 
-import { FormulaCarMesh }    from './car/FormulaCarMesh.js';
 import { VehicleController } from './car/VehicleController.js';
+import { VehicleSelector }  from './car/VehicleSelector.js';
 import { CameraManager }     from './camera/CameraManager.js';
 import { RoadSpline }        from './world/RoadSpline.js';
 import { RoadMeshBuilder }   from './world/RoadMeshBuilder.js';
@@ -49,10 +49,17 @@ class GameApp {
     // ── Atmosphere ────────────────────────────────────────
     this.atmosphere = new Atmosphere(this.scene, this.renderer);
 
-    // ── Car ───────────────────────────────────────────────
-    this.carMesh = new FormulaCarMesh();
-    this.scene.add(this.carMesh.root);
-    this.vehicleController = new VehicleController(this.carMesh);
+    // ── Vehicle System ────────────────────────────────────
+    // VehicleController is created with a temporary placeholder mesh;
+    // VehicleSelector replaces it immediately with the real Formula mesh.
+    this.vehicleController = new VehicleController(null);
+    this.vehicleSelector   = new VehicleSelector(
+      this.scene,
+      this.vehicleController,
+      (name) => {
+        if (this.hud) this.hud.setVehicleLabel(name);
+      }
+    );
 
     // ── Road ──────────────────────────────────────────────
     this.barrierMode = 'dynamic'; // 'dynamic' | 'none' | 'all'
@@ -150,14 +157,14 @@ class GameApp {
     this.nightAmbient = new THREE.PointLight(0x4060b0, 0, 50, 1.4);
     this.scene.add(this.nightAmbient);
 
-    // Glowing headlight bulb meshes on car nose
+    // Glowing headlight bulb meshes on car nose (attached to active car root)
     const bulbGeo = new THREE.SphereGeometry(0.08, 12, 12);
     this.bulbMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0 });
     this.bulbL = new THREE.Mesh(bulbGeo, this.bulbMat);
     this.bulbR = new THREE.Mesh(bulbGeo, this.bulbMat);
     this.bulbL.position.set(-0.65, 0.38, 2.7);
     this.bulbR.position.set(0.65, 0.38, 2.7);
-    this.carMesh.root.add(this.bulbL, this.bulbR);
+    this.vehicleSelector.activeMesh.root.add(this.bulbL, this.bulbR);
   }
 
   _setHeadlights(on) {
@@ -302,6 +309,14 @@ class GameApp {
       // Camera cycle
       if (k === 'c') this.cameraManager.cycleMode();
 
+      // Vehicle switch: V
+      if (k === 'v') {
+        // Move headlight bulbs to new active car before switching
+        this.vehicleSelector.switchNext();
+        const newRoot = this.vehicleSelector.activeMesh.root;
+        newRoot.add(this.bulbL, this.bulbR);
+      }
+
       // Road barrier cycle
       if (k === 'b') this.hud.cycleBarrierMode();
 
@@ -362,6 +377,9 @@ class GameApp {
     if (this.roadSpline.extendIfNecessary(this.vehicleController.position)) {
       this._rebuildRoadMesh();
     }
+
+    // Vehicle selector cooldown
+    this.vehicleSelector.update(dt);
 
     // Stream terrain chunks & water wave updates
     this.terrainManager.update(this.vehicleController.position, dt);
